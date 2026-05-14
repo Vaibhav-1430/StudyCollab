@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Create Account - StudyCollab</title>
+    <script>
+      (function () {
+        var base = document.createElement('base');
+        base.href = location.pathname.includes('/public/') ? '/public/' : '/';
+        document.head.appendChild(base);
+      })();
+    </script>
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/components.css" />
+    <link rel="stylesheet" href="css/auth.css" />
+  </head>
+  <body>
+    <div class="page-loader" id="pageLoader">
+      <div class="spinner"></div>
+    </div>
+    <script>
+      (function () {
+        var done = false;
+        function dismiss() {
+          if (done) return;
+          done = true;
+          var el = document.getElementById('pageLoader');
+          if (!el) return;
+          el.classList.add('hidden');
+          setTimeout(function () {
+            try {
+              el.remove();
+            } catch (e) {}
+          }, 450);
+        }
+        document.addEventListener('DOMContentLoaded', dismiss, { once: true });
+        setTimeout(dismiss, 500);
+      })();
+    </script>
+    <div class="bg-orbs"></div>
+    <div class="auth-shell">
+      <div class="auth-panel">
+        <h2>Create your account</h2>
+        <p>Build your first study room in minutes.</p>
+        <form class="auth-form" id="registerForm">
+          <div class="input-group">
+            <input class="input" type="text" name="name" placeholder="Full name" required />
+            <span class="input-help">Use a name your friends recognize.</span>
+          </div>
+          <div class="input-group">
+            <input class="input" type="email" name="email" placeholder="Email" required />
+            <span class="input-help">We'll never share your email.</span>
+          </div>
+          <div class="input-group">
+            <input
+              class="input"
+              id="registerPassword"
+              type="password"
+              name="password"
+              placeholder="Password"
+              required
+            />
+            <button class="input-addon" type="button" data-toggle-password="registerPassword">
+              Show
+            </button>
+            <span class="input-help" id="registerError"></span>
+          </div>
+          <div class="auth-actions">
+            <button class="btn btn-primary" type="submit">Create account</button>
+            <a class="btn btn-ghost" href="/login">I already have an account</a>
+            <button class="btn btn-outline" type="button" id="demoRegisterBtn">
+              Use demo account
+            </button>
+          </div>
+        </form>
+      </div>
+      <div class="auth-side">
+        <h3>Premium study experience</h3>
+        <ul>
+          <li>Glassmorphism UI with smooth motion</li>
+          <li>Realtime whiteboard + chat + files</li>
+          <li>Secure rooms and friend system</li>
+          <li>Instantly invite your study group</li>
+        </ul>
+        <div class="auth-glow"></div>
+      </div>
+    </div>
+    <div class="toast-container" id="toastContainer"></div>
+    <script defer src="runtime-config.js"></script>
+    <script type="module" src="js/register.js"></script>
+  </body>
+</html>

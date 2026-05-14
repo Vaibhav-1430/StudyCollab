@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StudyCollab - Premium Collaborative Study Rooms</title>
+    <script>
+      (function () {
+        var base = document.createElement('base');
+        base.href = location.pathname.includes('/public/') ? '/public/' : '/';
+        document.head.appendChild(base);
+      })();
+    </script>
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/components.css" />
+    <link rel="stylesheet" href="css/landing.css" />
+  </head>
+  <body>
+    <div class="page-loader" id="pageLoader">
+      <div class="spinner"></div>
+    </div>
+    <script>
+      (function () {
+        var done = false;
+        function dismiss() {
+          if (done) return;
+          done = true;
+          var el = document.getElementById('pageLoader');
+          if (!el) return;
+          el.classList.add('hidden');
+          setTimeout(function () {
+            try {
+              el.remove();
+            } catch (e) {}
+          }, 450);
+        }
+        document.addEventListener('DOMContentLoaded', dismiss, { once: true });
+        setTimeout(dismiss, 500);
+      })();
+    </script>
+    <div class="bg-orbs"></div>
+    <nav class="nav">
+      <div class="container nav-inner">
+        <div class="brand">StudyCollab</div>
+        <div class="nav-links">
+          <a href="#features">Features</a>
+          <a href="#workflow">Workflow</a>
+          <a href="#stories">Stories</a>
+          <a href="#cta">Launch</a>
+        </div>
+        <div class="nav-actions">
+          <a class="btn btn-ghost btn-pill" href="/login">Log in</a>
+          <a class="btn btn-primary btn-pill btn-glow" href="/register">Start for free</a>
+        </div>
+      </div>
+    </nav>
+
+    <section class="hero section">
+      <div class="container hero-grid">
+        <div class="hero-copy reveal">
+          <span class="tag">Live rooms. Zero friction.</span>
+          <h1>Build premium study rooms for real-time teaching and collaboration.</h1>
+          <p>
+            A unified workspace where your group can talk, draw, share screens, and save
+            everything without lag.
+          </p>
+          <div class="hero-cta">
+            <a class="btn btn-primary btn-glow" href="/register">Launch a room</a>
+            <a class="btn btn-ghost" href="#features">Explore features</a>
+          </div>
+          <div class="hero-metrics">
+            <div>
+              <h4>50ms sync</h4>
+              <p class="muted">Optimized events for smooth collaboration.</p>
+            </div>
+            <div>
+              <h4>Always live</h4>
+              <p class="muted">Audio, chat, and board update instantly.</p>
+            </div>
+          </div>
+        </div>
+        <div class="hero-visual reveal">
+          <div class="hero-preview">
+            <div class="preview-header">
+              <span class="badge">Room: Quantum Prep</span>
+              <span class="badge">4 online</span>
+            </div>
+            <div class="preview-board">
+              <div class="preview-line"></div>
+              <div class="preview-line"></div>
+              <div class="preview-sticky">Key ideas</div>
+            </div>
+            <div class="preview-footer">
+              <div class="pill">Whiteboard</div>
+              <div class="pill">Audio</div>
+              <div class="pill">Files</div>
+            </div>
+          </div>
+          <div class="hero-stack">
+            <div class="stack-card">
+              <h4>Files ready</h4>
+              <p class="muted">Upload slides or homework in seconds.</p>
+            </div>
+            <div class="stack-card">
+              <h4>Focus mode</h4>
+              <p class="muted">Keep attention on what matters.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container stat-strip reveal">
+        <div class="stat">
+          <h3>Infinite Canvas</h3>
+          <p class="muted">Sketch freely with pan and zoom tools.</p>
+        </div>
+        <div class="stat">
+          <h3>Secure Rooms</h3>
+          <p class="muted">JWT auth and private room access control.</p>
+        </div>
+        <div class="stat">
+          <h3>Cloud files</h3>
+          <p class="muted">Share PDFs and notes with Cloudinary.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2 class="section-title">Designed for focused collaboration</h2>
+          <p class="muted">Everything teams need to teach, learn, and stay aligned.</p>
+        </div>
+        <div class="features">
+          <div class="feature-card card-hover reveal">
+            <h4>Live whiteboard</h4>
+            <p>Event-based sync keeps the board smooth even with multiple users.</p>
+          </div>
+          <div class="feature-card card-hover reveal">
+            <h4>Audio + Screen share</h4>
+            <p>Built-in WebRTC for natural study sessions and demos.</p>
+          </div>
+          <div class="feature-card card-hover reveal">
+            <h4>Smart rooms</h4>
+            <p>Create public or private rooms with invite-only access.</p>
+          </div>
+          <div class="feature-card card-hover reveal">
+            <h4>Study vault</h4>
+            <p>Upload notes, PDFs, and whiteboard snapshots per room.</p>
+          </div>
+          <div class="feature-card card-hover reveal">
+            <h4>Friend system</h4>
+            <p>Invite classmates, accept requests, and stay connected.</p>
+          </div>
+          <div class="feature-card card-hover reveal">
+            <h4>Instant chat</h4>
+            <p>Messaging with typing indicators and message history.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="workflow" class="section">
+      <div class="container workflow">
+        <div class="section-head reveal">
+          <h2 class="section-title">Your study flow, upgraded</h2>
+          <p class="muted">Launch a room and start collaborating in seconds.</p>
+        </div>
+        <div class="workflow-grid">
+          <div class="workflow-card reveal">
+            <span class="badge">Step 1</span>
+            <h4>Create or join</h4>
+            <p>Start a private room or join using a short code.</p>
+          </div>
+          <div class="workflow-card reveal">
+            <span class="badge">Step 2</span>
+            <h4>Share instantly</h4>
+            <p>Speak, draw, and share screens without delay.</p>
+          </div>
+          <div class="workflow-card reveal">
+            <span class="badge">Step 3</span>
+            <h4>Save the session</h4>
+            <p>Keep notes, files, and boards ready for next time.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="stories" class="section">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2 class="section-title">Loved by study squads</h2>
+          <p class="muted">Teams move faster when collaboration feels effortless.</p>
+        </div>
+        <div class="testimonials">
+          <div class="testimonial-card reveal">
+            <p>"Our engineering lab finally feels organized. Everyone stays on the same board."</p>
+            <span class="muted">Aisha, CS Lead</span>
+          </div>
+          <div class="testimonial-card reveal">
+            <p>"The live cursors and audio make it feel like we are in the same room."</p>
+            <span class="muted">Jon, Physics Tutor</span>
+          </div>
+          <div class="testimonial-card reveal">
+            <p>"We save the boards after every session and never lose progress."</p>
+            <span class="muted">Marina, Study Group</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="cta" class="section">
+      <div class="container cta-card reveal">
+        <div>
+          <h2>Ready to collaborate?</h2>
+          <p>Launch your study room and invite your friends instantly.</p>
+        </div>
+        <div class="hero-cta">
+          <a class="btn btn-primary btn-glow" href="/register">Get started</a>
+          <a class="btn btn-ghost" href="/login">I already have an account</a>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div class="container footer-grid">
+        <div>
+          <div class="brand">StudyCollab</div>
+          <p class="muted">Crafted for deep focus and real-time learning.</p>
+        </div>
+        <div>
+          <h4>Product</h4>
+          <a href="#features">Features</a>
+          <a href="#workflow">Workflow</a>
+        </div>
+        <div>
+          <h4>Community</h4>
+          <a href="#stories">Stories</a>
+          <a href="/register">Join now</a>
+        </div>
+        <div>
+          <h4>Account</h4>
+          <a href="/login">Log in</a>
+          <a href="/register">Create account</a>
+        </div>
+      </div>
+    </footer>
+    <script defer src="runtime-config.js"></script>
+    <script type="module" src="js/landing.js"></script>
+  </body>
+</html>

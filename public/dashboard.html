@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard - StudyCollab</title>
+    <script>
+      (function () {
+        var base = document.createElement('base');
+        base.href = location.pathname.includes('/public/') ? '/public/' : '/';
+        document.head.appendChild(base);
+      })();
+    </script>
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/components.css" />
+    <link rel="stylesheet" href="css/dashboard.css" />
+  </head>
+  <body>
+    <div class="page-loader" id="pageLoader">
+      <div class="spinner"></div>
+    </div>
+    <script>
+      (function () {
+        var done = false;
+        function dismiss() {
+          if (done) return;
+          done = true;
+          var el = document.getElementById('pageLoader');
+          if (!el) return;
+          el.classList.add('hidden');
+          setTimeout(function () {
+            try {
+              el.remove();
+            } catch (e) {}
+          }, 450);
+        }
+        document.addEventListener('DOMContentLoaded', dismiss, { once: true });
+        setTimeout(dismiss, 500);
+      })();
+    </script>
+    <div class="bg-orbs"></div>
+    <div class="dashboard">
+      <aside class="sidebar">
+        <div class="brand">StudyCollab</div>
+        <div class="nav-links">
+          <a class="nav-link active" href="#dashboard" data-nav="dashboard">Dashboard</a>
+          <a class="nav-link" href="#rooms" data-nav="rooms" data-scroll="#roomsPanel">My rooms</a>
+          <a class="nav-link" href="#friends" data-nav="friends">Friends</a>
+          <a class="nav-link" href="#files" data-nav="files">Files</a>
+          <a class="nav-link" href="#profile" data-nav="profile">Profile</a>
+        </div>
+        <div class="sidebar-profile">
+          <div class="profile-card">
+            <div>
+              <h4 id="profileName">Student</h4>
+              <p class="muted" id="profileStatus">Online</p>
+            </div>
+            <span class="badge">Pro</span>
+          </div>
+          <div class="stats-mini">
+            <div>
+              <h4 id="roomsCount">0</h4>
+              <p class="muted">Rooms</p>
+            </div>
+            <div>
+              <h4 id="friendsCount">0</h4>
+              <p class="muted">Friends</p>
+            </div>
+          </div>
+          <button class="btn btn-ghost" id="openProfileBtn" type="button">Profile</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <nav class="mobile-section-nav" aria-label="Sections">
+          <a class="nav-link nav-chip" href="#dashboard" data-nav="dashboard">Home</a>
+          <a class="nav-link nav-chip" href="#rooms" data-nav="rooms" data-scroll="#roomsPanel">Rooms</a>
+          <a class="nav-link nav-chip" href="#friends" data-nav="friends">Friends</a>
+          <a class="nav-link nav-chip" href="#files" data-nav="files">Files</a>
+          <a class="nav-link nav-chip" href="#profile" data-nav="profile">Profile</a>
+        </nav>
+        <section class="page-section active" data-section="dashboard">
+          <div class="topbar">
+            <div>
+              <h2 id="welcomeTitle">Welcome back</h2>
+              <p class="muted">Your realtime study command center.</p>
+            </div>
+            <div class="actions">
+              <button class="btn btn-ghost" id="joinRoomBtn">Join room</button>
+              <button class="btn btn-primary" id="createRoomBtn">Create room</button>
+              <button class="btn btn-outline" id="logoutBtn">Log out</button>
+            </div>
+          </div>
+
+          <section class="stats-row">
+            <div class="stat-card">
+              <h4>Live sessions</h4>
+              <p class="muted" id="liveRooms">0 active right now</p>
+            </div>
+            <div class="stat-card">
+              <h4>Recent collaboration</h4>
+              <p class="muted">Whiteboards synced in the last 24h</p>
+            </div>
+            <div class="stat-card">
+              <h4>Focus streak</h4>
+              <p class="muted">3 days in a row</p>
+            </div>
+          </section>
+
+          <section class="panel" id="roomsPanel">
+            <h3>Active rooms</h3>
+            <div class="rooms-grid" id="roomsGrid"></div>
+          </section>
+          <section class="panel">
+            <h3>Recent rooms</h3>
+            <div class="rooms-grid" id="recentRooms"></div>
+          </section>
+        </section>
+
+        <section class="page-section" data-section="friends">
+          <div class="page-header">
+            <div>
+              <h2>Friends</h2>
+              <p class="muted">Build your study circle and stay in sync.</p>
+            </div>
+            <button class="btn btn-ghost" id="refreshFriendsBtn" type="button">Refresh</button>
+          </div>
+          <div class="page-grid">
+            <div class="panel">
+              <h3>Find friends</h3>
+              <input class="input" id="friendsSearchInput" placeholder="Search name or email" />
+              <div id="friendsSearchResults" style="margin-top: 12px"></div>
+            </div>
+            <div class="panel">
+              <h3>Friend requests</h3>
+              <div id="friendsRequestsList"></div>
+            </div>
+            <div class="panel">
+              <h3>Your friends</h3>
+              <div id="friendsPageList"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page-section" data-section="files">
+          <div class="page-header">
+            <div>
+              <h2>Files</h2>
+              <p class="muted">Store and share files across your rooms.</p>
+            </div>
+            <button class="btn btn-ghost" id="refreshFilesBtn" type="button">Refresh</button>
+          </div>
+          <div class="panel">
+            <h3>Upload a file</h3>
+            <form class="auth-form" id="filesUploadForm">
+              <div class="input-group">
+                <label class="muted" for="filesRoomCode">Room code</label>
+                <input
+                  class="input"
+                  id="filesRoomCode"
+                  name="roomCode"
+                  list="filesRoomList"
+                  placeholder="Enter room code"
+                  autocomplete="off"
+                />
+                <datalist id="filesRoomList"></datalist>
+              </div>
+              <input class="input" id="filesUploadInput" type="file" />
+              <div class="progress-track">
+                <div class="progress-fill" id="filesUploadProgress"></div>
+              </div>
+              <button class="btn btn-primary" id="filesUploadBtn" type="submit">Upload file</button>
+            </form>
+          </div>
+          <div class="panel">
+            <h3>Your uploads</h3>
+            <div id="filesLibraryList"></div>
+          </div>
+        </section>
+
+        <section class="page-section" data-section="profile">
+          <div class="page-header">
+            <div>
+              <h2>Profile</h2>
+              <p class="muted">Keep your account details fresh.</p>
+            </div>
+          </div>
+          <div class="profile-grid">
+            <div class="panel">
+              <h3>Avatar</h3>
+              <div class="avatar-preview" id="profileAvatarPreview">
+                <img id="profileAvatarImg" alt="Avatar" />
+              </div>
+              <input class="input" id="avatarInput" type="file" accept="image/*" />
+              <button class="btn btn-ghost" id="avatarUploadBtn" type="button">Upload avatar</button>
+            </div>
+            <div class="panel">
+              <h3>Account</h3>
+              <form class="auth-form" id="profileForm">
+                <div class="input-group">
+                  <label class="muted" for="profileNameInput">Name</label>
+                  <input class="input" id="profileNameInput" name="name" required />
+                </div>
+                <div class="input-group">
+                  <label class="muted" for="profileEmailInput">Email</label>
+                  <input class="input" id="profileEmailInput" name="email" disabled />
+                </div>
+                <div class="input-group">
+                  <label class="muted">Status</label>
+                  <div class="status-pill" id="profileStatusPill">Offline</div>
+                </div>
+                <button class="btn btn-primary" id="profileSaveBtn" type="submit">Save changes</button>
+              </form>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <aside class="right-panel">
+        <div class="panel">
+          <h3>Friend requests</h3>
+          <div id="requestsList"></div>
+        </div>
+        <div class="panel">
+          <h3>Friends</h3>
+          <div id="friendsList"></div>
+        </div>
+        <div class="panel">
+          <h3>Notifications</h3>
+          <div id="notificationList">
+            <div class="muted">No new notifications</div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Friends activity</h3>
+          <div id="activityList">
+            <div class="muted">No recent activity</div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Find friends</h3>
+          <input class="input" id="userSearchInput" placeholder="Search name or email" />
+          <div id="searchResults" style="margin-top: 12px"></div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="modal-overlay" id="createRoomModal">
+      <div class="modal open">
+        <div class="modal-header">
+          <h3>Create a room</h3>
+          <button class="btn btn-ghost" data-close>Close</button>
+        </div>
+        <form id="createRoomForm" class="auth-form">
+          <input class="input" name="name" placeholder="Room name" required />
+          <label style="display: flex; align-items: center; gap: 8px; color: var(--text-2)">
+            <input type="checkbox" name="isPublic" checked /> Public room
+          </label>
+          <button class="btn btn-primary" type="submit">Create</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="joinRoomModal">
+      <div class="modal open">
+        <div class="modal-header">
+          <h3>Join a room</h3>
+          <button class="btn btn-ghost" data-close>Close</button>
+        </div>
+        <form id="joinRoomForm" class="auth-form">
+          <input class="input" name="code" placeholder="Room code" required />
+          <button class="btn btn-primary" type="submit">Join</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+    <script defer src="/socket.io/socket.io.js"></script>
+    <script defer src="runtime-config.js"></script>
+    <script type="module" src="js/dashboard.js"></script>
+  </body>
+</html>

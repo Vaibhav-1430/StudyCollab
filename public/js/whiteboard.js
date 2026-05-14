@@ -1,0 +1,532 @@
+import { throttle } from './utils.js';
+
+const createId = () =>
+  (window.crypto?.randomUUID && window.crypto.randomUUID()) ||
+  `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+export class Whiteboard {
+  constructor(canvas, stage, socket, roomCode) {
+    this.canvas = canvas;
+    this.stage = stage;
+    this.socket = socket;
+    this.roomCode = roomCode;
+    this.ctx = canvas.getContext('2d');
+
+    this.tool = 'pencil';
+    this.color = '#6ee7ff';
+    this.size = 4;
+    this.scale = 1;
+    this.offset = { x: 0, y: 0 };
+    this.dpr = window.devicePixelRatio || 1;
+
+    this.events = [];
+    this.redo = [];
+    this.currentStroke = null;
+    this.previewShape = null;
+    this.textEditor = null;
+    this.isDrawing = false;
+    this.isPanning = false;
+    this.spacePressed = false;
+
+    this.emitStrokePoint = throttle((point) => {
+      if (!this.currentStroke) return;
+      this.socket.emit('board:stroke:point', {
+        code: this.roomCode,
+        strokeId: this.currentStroke.id,
+        point
+      });
+    }, 16);
+
+    this.needsRender = true;
+
+    this.resizeCanvas();
+    this.bindEvents();
+    this.attachSocket();
+    this.renderLoop();
+  }
+
+  bindEvents() {
+    window.addEventListener('resize', () => this.resizeCanvas());
+    window.addEventListener('keydown', (event) => {
+      if (event.code === 'Space') this.spacePressed = true;
+    });
+    window.addEventListener('keyup', (event) => {
+      if (event.code === 'Space') this.spacePressed = false;
+    });
+
+    this.canvas.addEventListener('pointerdown', (event) =>
+      this.onPointerDown(event)
+    );
+    this.canvas.addEventListener('pointermove', (event) =>
+      this.onPointerMove(event)
+    );
+    this.canvas.addEventListener('pointerup', () => this.onPointerUp());
+    this.canvas.addEventListener('pointerleave', () => this.onPointerUp());
+
+    this.canvas.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const delta = event.deltaY > 0 ? -0.1 : 0.1;
+      this.setZoom(this.scale + delta);
+    });
+  }
+
+  attachSocket() {
+    this.socket.on('board:stroke:start', ({ stroke }) => {
+      this.events.push({
+        type: 'stroke',
+        id: stroke.id,
+        color: stroke.color,
+        size: stroke.size,
+        mode: stroke.mode,
+        points: [stroke.point]
+      });
+      this.needsRender = true;
+    });
+
+    this.socket.on('board:stroke:point', ({ strokeId, point }) => {
+      const stroke = this.events.find(
+        (event) => event.type === 'stroke' && event.id === strokeId
+      );
+      if (stroke) {
+        stroke.points.push(point);
+        this.needsRender = true;
+      }
+    });
+
+    this.socket.on('board:shape:add', ({ shape }) => {
+      this.events.push({ type: 'shape', ...shape });
+      this.needsRender = true;
+    });
+
+    this.socket.on('board:text:add', ({ text }) => {
+      this.events.push({ type: 'text', ...text });
+      this.needsRender = true;
+    });
+
+    this.socket.on('board:sticky:add', ({ sticky }) => {
+      this.events.push({ type: 'sticky', ...sticky });
+      this.needsRender = true;
+    });
+
+    this.socket.on('board:clear', () => {
+      this.events.push({ type: 'clear', id: Date.now() });
+      this.redo = [];
+      this.needsRender = true;
+    });
+
+    this.socket.on('board:sync-data', ({ events }) => {
+      this.loadEvents(events);
+    });
+  }
+
+  setTool(tool) {
+    this.tool = tool;
+  }
+
+  setColor(color) {
+    this.color = color;
+  }
+
+  setSize(size) {
+    this.size = size;
+  }
+
+  setZoom(scale) {
+    this.scale = Math.min(Math.max(scale, 0.4), 3);
+    this.needsRender = true;
+  }
+
+  undo() {
+    this.socket.emit('board:undo', { code: this.roomCode });
+  }
+
+  redoAction() {
+    this.socket.emit('board:redo', { code: this.roomCode });
+  }
+
+  clear() {
+    this.socket.emit('board:clear', { code: this.roomCode });
+  }
+
+  getEvents() {
+    return this.events;
+  }
+
+  loadEvents(events = []) {
+    this.events = Array.isArray(events) ? events : [];
+    this.redo = [];
+    this.needsRender = true;
+  }
+
+  resizeCanvas() {
+    const { width, height } = this.stage.getBoundingClientRect();
+    this.dpr = window.devicePixelRatio || 1;
+    this.canvas.width = width * this.dpr;
+    this.canvas.height = height * this.dpr;
+    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.needsRender = true;
+  }
+
+  screenToWorld(point) {
+    return {
+      x: (point.x - this.offset.x) / this.scale,
+      y: (point.y - this.offset.y) / this.scale
+    };
+  }
+
+  worldToScreen(point) {
+    return {
+      x: point.x * this.scale + this.offset.x,
+      y: point.y * this.scale + this.offset.y
+    };
+  }
+
+  openTextEditor(point, type) {
+    if (this.textEditor) {
+      this.textEditor.remove();
+      this.textEditor = null;
+    }
+
+    const editor = document.createElement('div');
+    editor.className = 'text-editor';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = type === 'sticky' ? 'Sticky note' : 'Text';
+
+    const actions = document.createElement('div');
+    actions.className = 'text-editor-actions';
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'btn btn-primary';
+    addBtn.textContent = 'Add';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn-ghost';
+    cancelBtn.textContent = 'Cancel';
+
+    actions.appendChild(addBtn);
+    actions.appendChild(cancelBtn);
+    editor.appendChild(input);
+    editor.appendChild(actions);
+
+    const screen = this.worldToScreen(point);
+    editor.style.left = `${screen.x}px`;
+    editor.style.top = `${screen.y}px`;
+    this.stage.appendChild(editor);
+    input.focus();
+
+    const commit = () => {
+      const text = input.value.trim();
+      if (!text) {
+        editor.remove();
+        this.textEditor = null;
+        return;
+      }
+
+      if (type === 'text') {
+        const payload = {
+          id: createId(),
+          text,
+          position: point,
+          color: this.color,
+          size: Math.max(this.size * 3, 14)
+        };
+        this.events.push({ type: 'text', ...payload });
+        this.socket.emit('board:text:add', { code: this.roomCode, text: payload });
+      } else {
+        const payload = {
+          id: createId(),
+          text,
+          position: point,
+          color: this.color
+        };
+        this.events.push({ type: 'sticky', ...payload });
+        this.socket.emit('board:sticky:add', {
+          code: this.roomCode,
+          sticky: payload
+        });
+      }
+
+      this.needsRender = true;
+      editor.remove();
+      this.textEditor = null;
+    };
+
+    addBtn.addEventListener('click', commit);
+    cancelBtn.addEventListener('click', () => {
+      editor.remove();
+      this.textEditor = null;
+    });
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') commit();
+      if (event.key === 'Escape') {
+        editor.remove();
+        this.textEditor = null;
+      }
+    });
+
+    this.textEditor = editor;
+  }
+
+  onPointerDown(event) {
+    this.canvas.setPointerCapture(event.pointerId);
+    const point = this.screenToWorld({
+      x: event.offsetX,
+      y: event.offsetY
+    });
+
+    if (event.button === 1 || this.spacePressed) {
+      this.isPanning = true;
+      this.panStart = { x: event.clientX, y: event.clientY };
+      return;
+    }
+
+    if (['pencil', 'highlighter', 'eraser'].includes(this.tool)) {
+      this.startStroke(point);
+      return;
+    }
+
+    if (['rect', 'ellipse'].includes(this.tool)) {
+      this.previewShape = {
+        type: this.tool,
+        start: point,
+        end: point,
+        color: this.color,
+        size: this.size
+      };
+      this.needsRender = true;
+      return;
+    }
+
+    if (this.tool === 'text') {
+      this.openTextEditor(point, 'text');
+      return;
+    }
+
+    if (this.tool === 'sticky') {
+      this.openTextEditor(point, 'sticky');
+    }
+  }
+
+  onPointerMove(event) {
+    const point = this.screenToWorld({
+      x: event.offsetX,
+      y: event.offsetY
+    });
+
+    if (this.isPanning && this.panStart) {
+      const dx = event.clientX - this.panStart.x;
+      const dy = event.clientY - this.panStart.y;
+      this.offset.x += dx;
+      this.offset.y += dy;
+      this.panStart = { x: event.clientX, y: event.clientY };
+      this.needsRender = true;
+      return;
+    }
+
+    if (this.currentStroke) {
+      this.addStrokePoint(point);
+      return;
+    }
+
+    if (this.previewShape) {
+      this.previewShape.end = point;
+      this.needsRender = true;
+    }
+  }
+
+  onPointerUp() {
+    if (this.isPanning) {
+      this.isPanning = false;
+    }
+
+    if (this.currentStroke) {
+      this.finishStroke();
+    }
+
+    if (this.previewShape) {
+      const shape = {
+        id: createId(),
+        shapeType: this.previewShape.type,
+        start: this.previewShape.start,
+        end: this.previewShape.end,
+        color: this.previewShape.color,
+        size: this.previewShape.size
+      };
+      this.events.push({ type: 'shape', ...shape });
+      this.socket.emit('board:shape:add', { code: this.roomCode, shape });
+      this.previewShape = null;
+      this.needsRender = true;
+    }
+  }
+
+  startStroke(point) {
+    const mode =
+      this.tool === 'eraser' ? 'erase' : this.tool === 'highlighter' ? 'highlight' : 'draw';
+    const stroke = {
+      id: createId(),
+      color: this.color,
+      size: this.size,
+      mode,
+      points: [point]
+    };
+
+    this.currentStroke = stroke;
+    this.events.push({ type: 'stroke', ...stroke });
+
+    this.socket.emit('board:stroke:start', {
+      code: this.roomCode,
+      stroke: {
+        id: stroke.id,
+        color: stroke.color,
+        size: stroke.size,
+        mode: stroke.mode,
+        point
+      }
+    });
+
+    this.needsRender = true;
+  }
+
+  addStrokePoint(point) {
+    this.currentStroke.points.push(point);
+    this.emitStrokePoint(point);
+    this.needsRender = true;
+  }
+
+  finishStroke() {
+    this.socket.emit('board:stroke:end', {
+      code: this.roomCode,
+      strokeId: this.currentStroke.id
+    });
+    this.currentStroke = null;
+  }
+
+  renderLoop() {
+    if (this.needsRender) {
+      this.render();
+      this.needsRender = false;
+    }
+    requestAnimationFrame(() => this.renderLoop());
+  }
+
+  render() {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.restore();
+
+    ctx.save();
+    ctx.setTransform(
+      this.dpr * this.scale,
+      0,
+      0,
+      this.dpr * this.scale,
+      this.offset.x * this.dpr,
+      this.offset.y * this.dpr
+    );
+
+    const lastClear = this.events
+      .map((event, index) => (event.type === 'clear' ? index : -1))
+      .reduce((acc, value) => Math.max(acc, value), -1);
+
+    const drawEvents = lastClear >= 0 ? this.events.slice(lastClear + 1) : this.events;
+
+    drawEvents.forEach((event) => {
+      if (event.type === 'stroke') this.drawStroke(event);
+      if (event.type === 'shape') this.drawShape(event);
+      if (event.type === 'text') this.drawText(event);
+      if (event.type === 'sticky') this.drawSticky(event);
+    });
+
+    if (this.previewShape) {
+      this.drawShape({
+        shapeType: this.previewShape.type,
+        start: this.previewShape.start,
+        end: this.previewShape.end,
+        color: this.previewShape.color,
+        size: this.previewShape.size
+      });
+    }
+
+    ctx.restore();
+  }
+
+  drawStroke(stroke) {
+    const ctx = this.ctx;
+    if (stroke.points.length < 2) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = stroke.size;
+    ctx.strokeStyle = stroke.color;
+    if (stroke.mode === 'erase') {
+      ctx.globalCompositeOperation = 'destination-out';
+    } else if (stroke.mode === 'highlight') {
+      ctx.globalAlpha = 0.35;
+      ctx.globalCompositeOperation = 'source-over';
+    } else {
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    stroke.points.forEach((point, index) => {
+      if (index === 0) {
+        ctx.moveTo(point.x, point.y);
+      } else {
+        ctx.lineTo(point.x, point.y);
+      }
+    });
+
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  drawShape(shape) {
+    const ctx = this.ctx;
+    const x = Math.min(shape.start.x, shape.end.x);
+    const y = Math.min(shape.start.y, shape.end.y);
+    const width = Math.abs(shape.end.x - shape.start.x);
+    const height = Math.abs(shape.end.y - shape.start.y);
+
+    ctx.save();
+    ctx.lineWidth = shape.size;
+    ctx.strokeStyle = shape.color;
+
+    if (shape.shapeType === 'rect') {
+      ctx.strokeRect(x, y, width, height);
+    } else if (shape.shapeType === 'ellipse') {
+      ctx.beginPath();
+      ctx.ellipse(x + width / 2, y + height / 2, width / 2, height / 2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  drawText(text) {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.fillStyle = text.color;
+    ctx.font = `${text.size}px 'Space Grotesk'`;
+    ctx.fillText(text.text, text.position.x, text.position.y);
+    ctx.restore();
+  }
+
+  drawSticky(sticky) {
+    const ctx = this.ctx;
+    const width = 180;
+    const height = 120;
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.strokeStyle = sticky.color;
+    ctx.lineWidth = 2;
+    ctx.fillRect(sticky.position.x, sticky.position.y, width, height);
+    ctx.strokeRect(sticky.position.x, sticky.position.y, width, height);
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '14px "Space Grotesk"';
+    ctx.fillText(sticky.text, sticky.position.x + 10, sticky.position.y + 24);
+    ctx.restore();
+  }
+}
