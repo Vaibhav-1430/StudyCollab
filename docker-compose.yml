@@ -1,0 +1,45 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${PORT:-4000}:4000"
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      CLIENT_URL: http://localhost:${PORT:-4000}
+      CORS_ORIGINS: http://localhost:${PORT:-4000}
+      TRUST_PROXY: 0
+      MONGO_URI: mongodb://mongo:27017/study-collab
+      MONGO_AUTO_INDEX: "true"
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET before running docker compose}
+      JWT_EXPIRES_IN: 7d
+      RATE_LIMIT_MAX: 120
+      MAX_FILE_SIZE_MB: 20
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:?set CLOUDINARY_CLOUD_NAME before running docker compose}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:?set CLOUDINARY_API_KEY before running docker compose}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:?set CLOUDINARY_API_SECRET before running docker compose}
+      CLOUDINARY_FOLDER: ${CLOUDINARY_FOLDER:-study-collab}
+      STUN_URLS: stun:stun.l.google.com:19302,stun:global.stun.twilio.com:3478
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_USERNAME: ${TURN_USERNAME:-}
+      TURN_CREDENTIAL: ${TURN_CREDENTIAL:-}
+      LOG_LEVEL: info
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    command: ["mongod", "--wiredTigerCacheSizeGB", "0.5"]
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+volumes:
+  mongo-data:

@@ -1,7 +1,7 @@
 import { getToken, requireAuth } from './auth.js';
 import { apiFetch } from './api.js';
 import { API_BASE } from './config.js';
-import { qs, showToast, toggleModal, throttle, copyText, formatBytes } from './utils.js';
+import { qs, showToast, toggleModal, copyText, formatBytes } from './utils.js';
 import { initUI } from './ui.js';
 import { Whiteboard } from './whiteboard.js';
 import { AnnotationLayer } from './annotation.js';
@@ -18,7 +18,6 @@ const filesList = qs('#filesList');
 const notesList = qs('#notesList');
 const notesInput = qs('#notesInput');
 const saveNoteBtn = qs('#saveNoteBtn');
-const cursorLayer = qs('#cursorLayer');
 const boardStage = qs('#boardStage');
 const canvas = qs('#boardCanvas');
 const screenStage = qs('#screenStage');
@@ -28,7 +27,6 @@ const screenPlaceholder = qs('#screenPlaceholder');
 const presenterBadge = qs('#presenterBadge');
 const startShareBtn = qs('#startShareBtn');
 const modeToggle = qs('#modeToggle');
-const annotateToggleBtn = qs('#annotateToggleBtn');
 const whiteboardZoomGroup = qs('#whiteboardZoomGroup');
 
 const saveBoardBtn = qs('#saveBoardBtn');
@@ -37,9 +35,12 @@ const leaveRoomBtn = qs('#leaveRoomBtn');
 const uploadModal = qs('#uploadModal');
 const uploadForm = qs('#uploadForm');
 const uploadProgress = qs('#uploadProgress');
+const uploadPreview = qs('#uploadPreview');
 const fileDropzone = qs('#fileDropzone');
 const fileViewerModal = qs('#fileViewerModal');
 const fileViewerImage = qs('#fileViewerImage');
+const fileViewerFrame = qs('#fileViewerFrame');
+const fileViewerText = qs('#fileViewerText');
 const fileViewerCanvas = qs('#fileViewerCanvas');
 const fileViewerTitle = qs('#fileViewerTitle');
 const fileDownloadBtn = qs('#fileDownloadBtn');
@@ -55,6 +56,7 @@ const fileViewerStage = qs('#fileViewerStage');
 
 const muteBtn = qs('#muteBtn');
 const shareScreenBtn = qs('#shareScreenBtn');
+const audioInputSelect = qs('#audioInputSelect');
 
 const colorPicker = qs('#colorPicker');
 const strokeSize = qs('#strokeSize');
@@ -68,6 +70,7 @@ initUI();
 
 const resetUploadUI = () => {
   if (uploadProgress) uploadProgress.style.width = '0%';
+  if (uploadPreview) uploadPreview.innerHTML = '';
   if (fileDropzone) fileDropzone.textContent = 'Drag files here or click upload';
 };
 
@@ -102,6 +105,7 @@ window.addEventListener('pointermove', (event) => {
   );
   toolbar.style.left = `${nextLeft}px`;
   toolbar.style.top = `${nextTop}px`;
+  toolbar.style.bottom = 'auto';
 });
 
 window.addEventListener('pointerup', () => {
@@ -114,11 +118,10 @@ const toolButtons = {
   eraser: qs('#toolEraser'),
   rect: qs('#toolRect'),
   ellipse: qs('#toolEllipse'),
-  text: qs('#toolText'),
-  sticky: qs('#toolSticky')
+  text: qs('#toolText')
 };
 
-const remoteMedia = qs('#remoteMedia');
+const audioMedia = qs('#audioMedia');
 
 const codeRaw =
   window.location.pathname.split('/').pop() ||
@@ -134,8 +137,12 @@ if (!code) {
 
 const socket = io({ auth: { token: getToken() }, autoConnect: false });
 const whiteboard = new Whiteboard(canvas, boardStage, socket, code);
-const screenAnnotator = new AnnotationLayer(screenCanvas, screenStage, socket, code, 'screen');
-const rtc = new WebRTCManager(socket, qs('#remoteMedia'));
+const screenAnnotator = new AnnotationLayer(screenCanvas, screenStage, socket, code, {
+  target: 'screen',
+  reference: screenVideo,
+  normalize: true
+});
+const rtc = new WebRTCManager(socket, audioMedia);
 const rtcReady = rtc.init();
 const chat = new ChatManager(socket, code, {
   list: qs('#chatMessages'),
@@ -156,76 +163,14 @@ rtc.onScreenShareChange = (isSharing) => {
 };
 
 let workspaceMode = 'screen';
-let annotateEnabled = true;
 let activeLayer = whiteboard;
 let activeTool = 'pencil';
 let currentPresenter = null;
 let viewerAnnotator = null;
 let currentViewerFile = null;
 let viewerZoom = 1;
+let viewerObjectUrl = null;
 
-const updateMediaLayout = () => {
-  if (!remoteMedia) return;
-  const items = remoteMedia.querySelectorAll('video, audio');
-  remoteMedia.classList.toggle('empty', items.length === 0);
-};
-
-const placeFloatingVideo = (element) => {
-  if (!screenStage) return;
-  const stageRect = screenStage.getBoundingClientRect();
-  const width = element.offsetWidth || 180;
-  const height = element.offsetHeight || 120;
-  const padding = 18;
-  element.style.position = 'absolute';
-  const index = remoteMedia?.querySelectorAll('.remote-video').length || 1;
-  const col = (index - 1) % 2;
-  const row = Math.floor((index - 1) / 2);
-  const left = Math.max(stageRect.width - (col + 1) * (width + 12) - padding, 12);
-  const top = Math.max(stageRect.height - (row + 1) * (height + 12) - padding, 12);
-  element.style.left = `${left}px`;
-  element.style.top = `${top}px`;
-};
-
-const makeDraggableVideo = (element) => {
-  if (!element || element.dataset.dragReady) return;
-  element.dataset.dragReady = 'true';
-  let drag = null;
-
-  element.addEventListener('pointerdown', (event) => {
-    if (!screenStage) return;
-    element.setPointerCapture(event.pointerId);
-    const rect = element.getBoundingClientRect();
-    drag = {
-      id: event.pointerId,
-      offsetX: event.clientX - rect.left,
-      offsetY: event.clientY - rect.top
-    };
-    element.style.zIndex = '12';
-    element.classList.add('dragging');
-  });
-
-  window.addEventListener('pointermove', (event) => {
-    if (!drag || drag.id !== event.pointerId) return;
-    const stageRect = screenStage.getBoundingClientRect();
-    const left = Math.min(
-      Math.max(event.clientX - stageRect.left - drag.offsetX, 8),
-      stageRect.width - element.offsetWidth - 8
-    );
-    const top = Math.min(
-      Math.max(event.clientY - stageRect.top - drag.offsetY, 8),
-      stageRect.height - element.offsetHeight - 8
-    );
-    element.style.left = `${left}px`;
-    element.style.top = `${top}px`;
-  });
-
-  window.addEventListener('pointerup', (event) => {
-    if (!drag || drag.id !== event.pointerId) return;
-    drag = null;
-    element.classList.remove('dragging');
-    element.style.zIndex = '';
-  });
-};
 
 const setScreenPlaceholder = (visible) => {
   if (!screenPlaceholder) return;
@@ -242,7 +187,7 @@ const updateScreenStream = () => {
   }
 
   if (currentPresenter?.socketId) {
-    const stream = rtc.getRemoteStream(currentPresenter.socketId);
+    const stream = rtc.getRemoteScreenStream(currentPresenter.socketId);
     if (stream) {
       screenVideo.srcObject = stream;
       setScreenPlaceholder(false);
@@ -270,32 +215,61 @@ const clearPresenter = () => {
   updateScreenStream();
 };
 
-const cursorDots = new Map();
-const cursorColor = (value) => {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = value.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue}, 85%, 65%)`;
+let lastUsers = [];
+let pendingUploadFile = null;
+
+const escapeHtml = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const renderMarkdown = (value) => {
+  const escaped = escapeHtml(value);
+  return escaped
+    .replace(/^### (.*)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.*)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.*)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\n/g, '<br />');
 };
 
-rtc.onRemoteStream = (peerId, stream, element) => {
-  updateMediaLayout();
-  if (element) {
-    placeFloatingVideo(element);
-    makeDraggableVideo(element);
+const updateUploadPreview = (file) => {
+  if (!uploadPreview) return;
+  uploadPreview.innerHTML = '';
+  if (!file) return;
+  if (file.type.startsWith('image/')) {
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(file);
+    img.alt = file.name;
+    img.onload = () => URL.revokeObjectURL(img.src);
+    uploadPreview.appendChild(img);
+    return;
   }
-  if (currentPresenter?.socketId === peerId) {
-    updateScreenStream();
-  }
+  const meta = document.createElement('div');
+  meta.className = 'upload-preview-meta';
+  meta.textContent = `${file.name} - ${formatBytes(file.size)}`;
+  uploadPreview.appendChild(meta);
 };
 
 rtc.onRemoteRemoved = (peerId) => {
   if (currentPresenter?.socketId === peerId) {
     clearPresenter();
   }
-  updateMediaLayout();
+
+  if (lastUsers.some((user) => user.socketId === peerId)) {
+    rtcReady.then(() => rtc.connectToPeers(lastUsers, socket.id));
+  }
+};
+
+rtc.onRemoteStream = (peerId) => {
+  if (currentPresenter?.socketId === peerId) {
+    updateScreenStream();
+  }
 };
 
 const renderParticipants = (users = []) => {
@@ -304,20 +278,50 @@ const renderParticipants = (users = []) => {
     .map(
       (user) => `
       <div class="participant">
-        <div>${user.name}</div>
-        <span class="badge">${user.status || 'online'}</span>
+        <div>${escapeHtml(user.name || 'User')}</div>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <span class="badge">${escapeHtml(user.status || 'online')}</span>
+          <span class="badge ${user.isMuted ? 'badge-muted' : 'badge-live'}">${
+            user.isMuted ? 'Muted' : 'Live'
+          }</span>
+        </div>
       </div>
     `
     )
     .join('');
 };
 
-const setAnnotateEnabled = (nextEnabled) => {
-  annotateEnabled = Boolean(nextEnabled);
-  screenAnnotator.setEnabled(annotateEnabled);
-  if (annotateToggleBtn) {
-    annotateToggleBtn.textContent = annotateEnabled ? 'Annotate' : 'Pointer';
-    annotateToggleBtn.classList.toggle('active', annotateEnabled);
+const updateMuteUI = (muted) => {
+  if (!muteBtn) return;
+  muteBtn.textContent = muted ? 'Unmute' : 'Mute';
+  muteBtn.classList.toggle('active', muted);
+};
+
+const refreshAudioDevices = async () => {
+  if (!audioInputSelect || !navigator.mediaDevices?.enumerateDevices) return;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter((device) => device.kind === 'audioinput');
+    audioInputSelect.innerHTML = '';
+    if (!inputs.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No microphone found';
+      audioInputSelect.appendChild(option);
+      audioInputSelect.disabled = true;
+      return;
+    }
+
+    inputs.forEach((device, index) => {
+      const option = document.createElement('option');
+      option.value = device.deviceId;
+      option.textContent = device.label || `Microphone ${index + 1}`;
+      audioInputSelect.appendChild(option);
+    });
+
+    audioInputSelect.disabled = false;
+  } catch (err) {
+    // Ignore device enumeration errors
   }
 };
 
@@ -336,15 +340,16 @@ const setWorkspaceMode = (mode) => {
 
   if (mode === 'whiteboard') {
     activeLayer = whiteboard;
-    setAnnotateEnabled(false);
+    screenAnnotator.setEnabled(false);
+    whiteboard.refreshSize?.();
   } else if (mode === 'presentation') {
     activeLayer = screenAnnotator;
-    setAnnotateEnabled(false);
+    screenAnnotator.setEnabled(true);
     screenAnnotator.resizeCanvas();
     screenAnnotator.requestSync();
   } else {
     activeLayer = screenAnnotator;
-    setAnnotateEnabled(true);
+    screenAnnotator.setEnabled(true);
     screenAnnotator.resizeCanvas();
     screenAnnotator.requestSync();
   }
@@ -374,6 +379,18 @@ const downloadFileWithAuth = async (fileId, fallbackName) => {
   }
 };
 
+const getFileBlobUrl = async (file) => {
+  const fileId = file._id || file.id;
+  const response = await fetch(`${API_BASE}/api/files/${fileId}/download`, {
+    headers: { Authorization: `Bearer ${getToken()}` }
+  });
+  if (!response.ok) throw new Error('Preview failed');
+  const blob = await response.blob();
+  if (viewerObjectUrl) URL.revokeObjectURL(viewerObjectUrl);
+  viewerObjectUrl = URL.createObjectURL(blob);
+  return { blob, url: viewerObjectUrl };
+};
+
 const renderFiles = (files = []) => {
   if (!filesList) return;
 
@@ -385,11 +402,11 @@ const renderFiles = (files = []) => {
   filesList.innerHTML = files
     .map(
       (file) => {
-        const name = file.originalName || file.name;
+        const name = escapeHtml(file.originalName || file.name || 'File');
         const isImage = file.mimeType?.startsWith('image/');
         const isPdf = file.mimeType === 'application/pdf';
         const preview = isImage
-          ? `<img src="${file.url}" alt="${name}" loading="lazy" />`
+          ? `<img src="${encodeURI(file.url || '')}" alt="${name}" loading="lazy" />`
           : `<div class="file-icon">${isPdf ? 'PDF' : 'FILE'}</div>`;
 
         return `
@@ -401,7 +418,7 @@ const renderFiles = (files = []) => {
           <div class="file-name" title="${name}">${name}</div>
           <div class="file-badges">
             <span class="badge">${formatBytes(file.size || 0)}</span>
-            <span class="badge">${file.mimeType || 'file'}</span>
+            <span class="badge">${escapeHtml(file.mimeType || 'file')}</span>
           </div>
         </div>
         <div class="file-actions">
@@ -468,7 +485,11 @@ const ensureViewerAnnotator = () => {
       fileViewerStage,
       socket,
       code,
-      'file:temp'
+      {
+        target: 'file:temp',
+        reference: fileViewerImage,
+        normalize: true
+      }
     );
   }
   return viewerAnnotator;
@@ -485,16 +506,17 @@ const applyViewerZoom = () => {
   }
 };
 
-const openFileViewer = (file) => {
+const openFileViewer = async (file) => {
   if (!fileViewerModal || !fileViewerImage) return;
-  if (!file.mimeType?.startsWith('image/')) {
-    window.open(file.url, '_blank', 'noopener');
-    return;
-  }
-
   currentViewerFile = file;
   fileViewerTitle.textContent = file.originalName || file.name || 'File preview';
-  fileViewerImage.src = file.url;
+  fileViewerImage.hidden = true;
+  fileViewerFrame.hidden = true;
+  fileViewerText.hidden = true;
+  fileViewerCanvas.hidden = false;
+  fileViewerImage.removeAttribute('src');
+  if (fileViewerFrame) fileViewerFrame.removeAttribute('src');
+  if (fileViewerText) fileViewerText.innerHTML = '';
   viewerZoom = 1;
   applyViewerZoom();
 
@@ -502,15 +524,36 @@ const openFileViewer = (file) => {
   if (annotator) {
     annotator.setTarget(`file:${file._id || file.id}`);
     annotator.setEnabled(true);
-    annotator.setTool(activeTool === 'sticky' ? 'pencil' : activeTool);
+    annotator.setTool(activeTool);
   }
 
   if (typeof updateViewerToolActive === 'function') {
-    updateViewerToolActive(activeTool === 'sticky' ? 'pencil' : activeTool);
+    updateViewerToolActive(activeTool);
   }
 
   toggleModal('#fileViewerModal', true);
-  setTimeout(() => annotator?.resizeCanvas(), 50);
+  try {
+    const { blob, url } = await getFileBlobUrl(file);
+    if (file.mimeType?.startsWith('image/')) {
+      fileViewerImage.hidden = false;
+      fileViewerImage.src = url;
+    } else if (file.mimeType === 'application/pdf') {
+      fileViewerFrame.hidden = false;
+      fileViewerFrame.src = url;
+    } else if (file.mimeType?.startsWith('text/')) {
+      fileViewerText.hidden = false;
+      const text = await blob.text();
+      fileViewerText.innerHTML =
+        file.mimeType === 'text/markdown' || /\.md$/i.test(file.originalName || file.name || '')
+          ? renderMarkdown(text)
+          : escapeHtml(text);
+    } else {
+      showToast('Preview unavailable for this file type', 'info');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+  setTimeout(() => annotator?.resizeCanvas(), 80);
 };
 
 const renderNotes = (notes = []) => {
@@ -526,8 +569,8 @@ const renderNotes = (notes = []) => {
     .map(
       (note) => `
       <div class="chat-message">
-        <div class="meta">${note.createdBy?.name || 'Anon'}</div>
-        <div>${note.content}</div>
+        <div class="meta">${escapeHtml(note.createdBy?.name || 'Anon')}</div>
+        <div>${escapeHtml(note.content)}</div>
       </div>
     `
     )
@@ -544,10 +587,6 @@ const loadNotes = async () => {
 };
 
 const updateToolActive = (tool) => {
-  if (tool === 'sticky' && activeLayer !== whiteboard) {
-    showToast('Sticky notes are available on the whiteboard', 'info');
-    return;
-  }
   Object.values(toolButtons).forEach((button) =>
     button?.classList.remove('active')
   );
@@ -567,11 +606,6 @@ modeToggle?.addEventListener('click', (event) => {
   updateToolActive(activeTool);
 });
 
-annotateToggleBtn?.addEventListener('click', () => {
-  if (workspaceMode === 'whiteboard') return;
-  setAnnotateEnabled(!annotateEnabled);
-});
-
 updateToolActive('pencil');
 setWorkspaceMode('screen');
 setScreenPlaceholder(true);
@@ -585,19 +619,31 @@ strokeSize?.addEventListener('input', (event) => {
 });
 
 undoBtn?.addEventListener('click', () => {
-  if (activeLayer === screenAnnotator && !annotateEnabled) return;
   activeLayer.undo();
 });
 redoBtn?.addEventListener('click', () => {
-  if (activeLayer === screenAnnotator && !annotateEnabled) return;
   activeLayer.redoAction();
 });
 clearBtn?.addEventListener('click', () => {
-  if (activeLayer === screenAnnotator && !annotateEnabled) return;
   activeLayer.clear();
 });
 zoomInBtn?.addEventListener('click', () => whiteboard.setZoom(whiteboard.scale + 0.1));
 zoomOutBtn?.addEventListener('click', () => whiteboard.setZoom(whiteboard.scale - 0.1));
+
+audioInputSelect?.addEventListener('change', async () => {
+  const deviceId = audioInputSelect.value;
+  if (!deviceId) return;
+  const ok = await rtc.setAudioInputDevice(deviceId);
+  if (!ok) {
+    showToast('Could not switch microphone', 'error');
+  }
+});
+
+if (navigator.mediaDevices?.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    refreshAudioDevices();
+  });
+}
 
 saveBoardBtn?.addEventListener('click', async () => {
   try {
@@ -621,12 +667,17 @@ uploadForm?.querySelector('input[type="file"]')?.addEventListener('change', (eve
   if (file && fileDropzone) {
     fileDropzone.textContent = file.name;
   }
+  pendingUploadFile = file || null;
+  updateUploadPreview(pendingUploadFile);
 });
 
 uploadModal?.addEventListener('click', (event) => {
   if (event.target === uploadModal || event.target.hasAttribute('data-close')) {
     toggleModal('#uploadModal', false);
     resetUploadUI();
+    pendingUploadFile = null;
+    const input = uploadForm?.querySelector('input[type="file"]');
+    if (input) input.value = '';
   }
 });
 
@@ -634,6 +685,10 @@ fileViewerModal?.addEventListener('click', (event) => {
   if (event.target === fileViewerModal || event.target.hasAttribute('data-close')) {
     toggleModal('#fileViewerModal', false);
     currentViewerFile = null;
+    if (viewerObjectUrl) {
+      URL.revokeObjectURL(viewerObjectUrl);
+      viewerObjectUrl = null;
+    }
     if (viewerAnnotator) {
       viewerAnnotator.setEnabled(false);
       viewerAnnotator.setTarget('file:temp');
@@ -701,7 +756,8 @@ fileViewerImage?.addEventListener('load', () => {
 
 uploadForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const file = uploadForm.querySelector('input[type="file"]').files[0];
+  const fileInput = uploadForm.querySelector('input[type="file"]');
+  const file = pendingUploadFile || fileInput?.files?.[0];
   if (!file) return;
 
   const formData = new FormData();
@@ -732,6 +788,8 @@ uploadForm?.addEventListener('submit', async (event) => {
     showToast('File uploaded', 'success');
     toggleModal('#uploadModal', false);
     resetUploadUI();
+    if (fileInput) fileInput.value = '';
+    pendingUploadFile = null;
     socket.emit('files:uploaded', { code, file: data.file });
     loadFiles();
   } catch (err) {
@@ -759,10 +817,12 @@ fileDropzone?.addEventListener('drop', (event) => {
   event.preventDefault();
   fileDropzone.classList.remove('dragover');
   const files = event.dataTransfer.files;
-  const input = uploadForm?.querySelector('input[type="file"]');
-  if (files && files[0] && input) {
-    input.files = files;
+  if (files && files[0]) {
+    pendingUploadFile = files[0];
     fileDropzone.textContent = files[0].name;
+    updateUploadPreview(files[0]);
+    const input = uploadForm?.querySelector('input[type="file"]');
+    if (input) input.value = '';
     toggleModal('#uploadModal', true);
   }
 });
@@ -795,10 +855,18 @@ leaveRoomBtn?.addEventListener('click', () => {
 
 muteBtn?.addEventListener('click', () => {
   const isMuted = rtc.toggleMute();
-  muteBtn.textContent = isMuted ? 'Unmute' : 'Mute';
+  updateMuteUI(isMuted);
+  socket.emit('audio:mute', { code, muted: isMuted });
+
+  const self = lastUsers.find((user) => user.socketId === socket.id);
+  if (self) {
+    self.isMuted = isMuted;
+    renderParticipants(lastUsers);
+  }
 });
 
 shareScreenBtn?.addEventListener('click', async () => {
+  await rtcReady;
   const sharing = await rtc.toggleScreenShare();
   shareScreenBtn.textContent = sharing ? 'Stop share' : 'Share screen';
   if (sharing) {
@@ -812,6 +880,7 @@ shareScreenBtn?.addEventListener('click', async () => {
 });
 
 startShareBtn?.addEventListener('click', async () => {
+  await rtcReady;
   const sharing = await rtc.toggleScreenShare();
   shareScreenBtn.textContent = sharing ? 'Stop share' : 'Share screen';
   if (sharing) {
@@ -821,48 +890,27 @@ startShareBtn?.addEventListener('click', async () => {
   }
 });
 
-const sendCursor = throttle((x, y) => {
-  socket.emit('cursor:move', { code, x, y });
-}, 40);
-
-boardStage?.addEventListener('pointermove', (event) => {
-  if (workspaceMode !== 'whiteboard') return;
-  const rect = boardStage.getBoundingClientRect();
-  const x = event.clientX - rect.left;
-  const y = event.clientY - rect.top;
-  sendCursor(x, y);
-});
-
-socket.on('cursor:move', ({ userId, x, y }) => {
-  if (!cursorLayer) return;
-  let dot = cursorDots.get(userId);
-  if (!dot) {
-    dot = document.createElement('div');
-    dot.className = 'cursor-dot';
-    const color = cursorColor(userId);
-    dot.style.background = color;
-    dot.style.boxShadow = `0 0 12px ${color}`;
-    cursorLayer.appendChild(dot);
-    cursorDots.set(userId, dot);
-  }
-  dot.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
-});
-
 socket.on('room:user-left', ({ userId, socketId }) => {
   if (socketId) rtc.removePeer(socketId);
-  const dot = cursorDots.get(userId);
-  if (dot) {
-    dot.remove();
-    cursorDots.delete(userId);
-  }
   if (currentPresenter?.socketId === socketId) {
     clearPresenter();
   }
 });
 
 socket.on('room:users', ({ users }) => {
-  renderParticipants(users);
-  rtcReady.then(() => rtc.connectToPeers(users, socket.id));
+  lastUsers = Array.isArray(users) ? users : [];
+  renderParticipants(lastUsers);
+  rtcReady.then(() => rtc.connectToPeers(lastUsers, socket.id));
+});
+
+socket.on('audio:mute', ({ socketId, userId, muted }) => {
+  const target = lastUsers.find(
+    (user) => user.socketId === socketId || user.id === userId
+  );
+  if (target) {
+    target.isMuted = Boolean(muted);
+    renderParticipants(lastUsers);
+  }
 });
 
 socket.on('screen:share:state', ({ presenter }) => {
@@ -890,12 +938,6 @@ socket.on('room:user-joined', ({ user }) => {
   showToast(`${user.name} joined`, 'success');
 });
 
-const mediaObserver = new MutationObserver(() => updateMediaLayout());
-if (remoteMedia) {
-  mediaObserver.observe(remoteMedia, { childList: true });
-  updateMediaLayout();
-}
-
 socket.on('room:error', (payload) => {
   showToast(payload.message, 'error');
   setTimeout(() => {
@@ -905,12 +947,15 @@ socket.on('room:error', (payload) => {
 
 socket.on('connect', async () => {
   await rtcReady;
+  rtc.setSelfId(socket.id);
+  updateMuteUI(Boolean(rtc.isMuted));
+  await refreshAudioDevices();
   socket.emit('room:join', { code });
-  updateMediaLayout();
   screenAnnotator.requestSync();
 });
 
 window.addEventListener('beforeunload', () => {
+  rtc.stopScreenShare();
   socket.emit('room:leave', { code });
 });
 

@@ -13,14 +13,28 @@ const createRoom = asyncHandler(async (req, res) => {
     return res.status(400).json({ message: 'Room name is required' });
   }
 
-  const code = generateRoomCode();
-  const room = await Room.create({
-    name,
-    code,
-    owner: req.user._id,
-    isPublic,
-    members: [req.user._id]
-  });
+  let room = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = generateRoomCode();
+    try {
+      room = await Room.create({
+        name,
+        code,
+        owner: req.user._id,
+        isPublic,
+        members: [req.user._id]
+      });
+      break;
+    } catch (err) {
+      if (err.code !== 11000) {
+        throw err;
+      }
+    }
+  }
+
+  if (!room) {
+    return res.status(500).json({ message: 'Failed to generate room code' });
+  }
 
   return res.status(201).json({ room });
 });
@@ -69,17 +83,31 @@ const studyWithFriend = asyncHandler(async (req, res) => {
     return res.status(404).json({ message: 'Friend not found' });
   }
 
-  const code = generateRoomCode();
   const rawName = `Study · ${req.user.name} & ${friend.name}`;
   const name = rawName.length > 80 ? `${rawName.slice(0, 77)}...` : rawName;
 
-  const room = await Room.create({
-    name,
-    code,
-    owner: req.user._id,
-    isPublic: false,
-    members: [req.user._id, friendId]
-  });
+  let room = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = generateRoomCode();
+    try {
+      room = await Room.create({
+        name,
+        code,
+        owner: req.user._id,
+        isPublic: false,
+        members: [req.user._id, friendId]
+      });
+      break;
+    } catch (err) {
+      if (err.code !== 11000) {
+        throw err;
+      }
+    }
+  }
+
+  if (!room) {
+    return res.status(500).json({ message: 'Failed to generate room code' });
+  }
 
   const io = req.app.get('io');
   const socketId = store.getSocketId(friendId);

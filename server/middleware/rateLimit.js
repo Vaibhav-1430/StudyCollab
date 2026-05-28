@@ -1,10 +1,12 @@
 const rateLimit = require('express-rate-limit');
+const config = require('../config/env');
 
 const limiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 200,
+  windowMs: config.rateLimit.windowMs,
+  max: config.rateLimit.max,
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  message: { message: 'Too many requests, please try again later' }
 });
 
 module.exports = limiter;

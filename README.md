@@ -34,7 +34,6 @@ A production-grade collaborative study platform with real-time whiteboard, chat,
   /socket
   /config
   /utils
-/uploads
 ```
 
 ## Local Setup
@@ -61,23 +60,11 @@ A production-grade collaborative study platform with real-time whiteboard, chat,
 - `CLOUDINARY_FOLDER`: Optional Cloudinary folder name
 - `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL`: Optional TURN config
 
-## Deployment (Free Tier)
-### Render (Backend)
-- Create a new Node.js service
-- Set build command: `npm install`
-- Set start command: `npm start`
-- Add env vars from `.env.example`
-- Ensure MongoDB Atlas network access allows your host
-
-### Vercel or Netlify (Frontend only)
-- Deploy `/public` as a static site if you want a standalone frontend
-- Point API calls to your Render server
-
-`vercel.json` is included for static hosting of the frontend.
-`netlify.toml` is included for Netlify static hosting.
-
-Set the API base for the frontend by editing [public/runtime-config.js](public/runtime-config.js)
-and putting your Render URL into `apiBase`.
+## Deployment
+- Use Render for the production Node.js service because the app needs Express,
+  Socket.IO, WebRTC signaling, and authenticated uploads.
+- Use `render.yaml` for the Render blueprint.
+- See `DEPLOYMENT.md` for Atlas, Cloudinary, Docker, and Render steps.
 
 ### Cloudinary (Free Tier)
 - Create a free Cloudinary account and set `CLOUDINARY_CLOUD_NAME`,

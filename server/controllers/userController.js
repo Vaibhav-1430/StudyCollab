@@ -3,6 +3,7 @@ const User = require('../models/User');
 const asyncHandler = require('../utils/asyncHandler');
 const { sanitizeString } = require('../utils/sanitize');
 const { initCloudinary } = require('../config/cloudinary');
+const config = require('../config/env');
 
 const cloudinary = initCloudinary();
 
@@ -44,7 +45,7 @@ const uploadAvatar = asyncHandler(async (req, res) => {
     return res.status(500).json({ message: 'Avatar storage is not configured' });
   }
 
-  const folder = process.env.CLOUDINARY_FOLDER || 'study-collab';
+  const folder = config.cloudinary.folder;
 
   const uploadResult = await new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(

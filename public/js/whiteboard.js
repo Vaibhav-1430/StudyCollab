@@ -1,8 +1,14 @@
-import { throttle } from './utils.js';
+const BOARD_WIDTH = 2400;
+const BOARD_HEIGHT = 1350;
 
 const createId = () =>
   (window.crypto?.randomUUID && window.crypto.randomUUID()) ||
   `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+const lastClearIndex = (events) =>
+  events.reduce((latest, event, index) => (event.type === 'clear' ? index : latest), -1);
 
 export class Whiteboard {
   constructor(canvas, stage, socket, roomCode) {
@@ -10,87 +16,54 @@ export class Whiteboard {
     this.stage = stage;
     this.socket = socket;
     this.roomCode = roomCode;
-    this.ctx = canvas.getContext('2d');
+    this.ctx = canvas.getContext('2d', { alpha: true });
 
     this.tool = 'pencil';
     this.color = '#6ee7ff';
-    this.size = 4;
+    this.size = 5;
     this.scale = 1;
     this.offset = { x: 0, y: 0 };
     this.dpr = window.devicePixelRatio || 1;
+    this.rect = { width: 1, height: 1 };
 
     this.events = [];
-    this.redo = [];
     this.currentStroke = null;
+    this.pendingPoints = [];
     this.previewShape = null;
     this.textEditor = null;
-    this.isDrawing = false;
-    this.isPanning = false;
-    this.spacePressed = false;
-
-    this.emitStrokePoint = throttle((point) => {
-      if (!this.currentStroke) return;
-      this.socket.emit('board:stroke:point', {
-        code: this.roomCode,
-        strokeId: this.currentStroke.id,
-        point
-      });
-    }, 16);
-
     this.needsRender = true;
+    this.resizeObserver = new ResizeObserver(() => this.resizeCanvas());
+
+    this.flushPoints = this.flushPoints.bind(this);
+    this.flushTimer = window.setInterval(this.flushPoints, 28);
 
     this.resizeCanvas();
+    this.resizeObserver.observe(this.stage);
     this.bindEvents();
     this.attachSocket();
     this.renderLoop();
   }
 
   bindEvents() {
-    window.addEventListener('resize', () => this.resizeCanvas());
-    window.addEventListener('keydown', (event) => {
-      if (event.code === 'Space') this.spacePressed = true;
-    });
-    window.addEventListener('keyup', (event) => {
-      if (event.code === 'Space') this.spacePressed = false;
-    });
-
-    this.canvas.addEventListener('pointerdown', (event) =>
-      this.onPointerDown(event)
-    );
-    this.canvas.addEventListener('pointermove', (event) =>
-      this.onPointerMove(event)
-    );
-    this.canvas.addEventListener('pointerup', () => this.onPointerUp());
-    this.canvas.addEventListener('pointerleave', () => this.onPointerUp());
-
-    this.canvas.addEventListener('wheel', (event) => {
-      event.preventDefault();
-      const delta = event.deltaY > 0 ? -0.1 : 0.1;
-      this.setZoom(this.scale + delta);
-    });
+    this.canvas.addEventListener('pointerdown', (event) => this.onPointerDown(event));
+    this.canvas.addEventListener('pointermove', (event) => this.onPointerMove(event));
+    this.canvas.addEventListener('pointerup', (event) => this.onPointerUp(event));
+    this.canvas.addEventListener('pointercancel', (event) => this.onPointerUp(event));
+    this.canvas.addEventListener('pointerleave', (event) => this.onPointerUp(event));
   }
 
   attachSocket() {
     this.socket.on('board:stroke:start', ({ stroke }) => {
-      this.events.push({
-        type: 'stroke',
-        id: stroke.id,
-        color: stroke.color,
-        size: stroke.size,
-        mode: stroke.mode,
-        points: [stroke.point]
-      });
+      this.events.push({ type: 'stroke', ...stroke, points: [stroke.point] });
       this.needsRender = true;
     });
 
     this.socket.on('board:stroke:point', ({ strokeId, point }) => {
-      const stroke = this.events.find(
-        (event) => event.type === 'stroke' && event.id === strokeId
-      );
-      if (stroke) {
-        stroke.points.push(point);
-        this.needsRender = true;
-      }
+      this.addRemotePoints(strokeId, [point]);
+    });
+
+    this.socket.on('board:stroke:points', ({ strokeId, points }) => {
+      this.addRemotePoints(strokeId, points);
     });
 
     this.socket.on('board:shape:add', ({ shape }) => {
@@ -103,24 +76,17 @@ export class Whiteboard {
       this.needsRender = true;
     });
 
-    this.socket.on('board:sticky:add', ({ sticky }) => {
-      this.events.push({ type: 'sticky', ...sticky });
-      this.needsRender = true;
-    });
-
     this.socket.on('board:clear', () => {
-      this.events.push({ type: 'clear', id: Date.now() });
-      this.redo = [];
+      this.events.push({ type: 'clear', id: createId() });
       this.needsRender = true;
     });
 
-    this.socket.on('board:sync-data', ({ events }) => {
-      this.loadEvents(events);
-    });
+    this.socket.on('board:sync-data', ({ events }) => this.loadEvents(events));
   }
 
   setTool(tool) {
-    this.tool = tool;
+    this.tool = tool === 'sticky' ? 'text' : tool;
+    this.canvas.dataset.tool = this.tool;
   }
 
   setColor(color) {
@@ -128,11 +94,12 @@ export class Whiteboard {
   }
 
   setSize(size) {
-    this.size = size;
+    this.size = clamp(Number(size) || 5, 1, 36);
   }
 
   setZoom(scale) {
-    this.scale = Math.min(Math.max(scale, 0.4), 3);
+    this.scale = clamp(scale, 0.55, 2.4);
+    this.centerBoard();
     this.needsRender = true;
   }
 
@@ -154,132 +121,65 @@ export class Whiteboard {
 
   loadEvents(events = []) {
     this.events = Array.isArray(events) ? events : [];
-    this.redo = [];
     this.needsRender = true;
+  }
+
+  refreshSize() {
+    this.resizeCanvas();
   }
 
   resizeCanvas() {
-    const { width, height } = this.stage.getBoundingClientRect();
+    const rect = this.stage.getBoundingClientRect();
+    this.rect = {
+      width: Math.max(1, rect.width),
+      height: Math.max(1, rect.height)
+    };
     this.dpr = window.devicePixelRatio || 1;
-    this.canvas.width = width * this.dpr;
-    this.canvas.height = height * this.dpr;
-    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.canvas.width = Math.round(this.rect.width * this.dpr);
+    this.canvas.height = Math.round(this.rect.height * this.dpr);
+    this.centerBoard();
     this.needsRender = true;
   }
 
-  screenToWorld(point) {
+  centerBoard() {
+    const fit = Math.min(this.rect.width / BOARD_WIDTH, this.rect.height / BOARD_HEIGHT);
+    this.viewScale = fit * this.scale;
+    this.offset.x = (this.rect.width - BOARD_WIDTH * this.viewScale) / 2;
+    this.offset.y = (this.rect.height - BOARD_HEIGHT * this.viewScale) / 2;
+  }
+
+  pointerToWorld(event) {
+    const rect = this.canvas.getBoundingClientRect();
     return {
-      x: (point.x - this.offset.x) / this.scale,
-      y: (point.y - this.offset.y) / this.scale
+      x: clamp((event.clientX - rect.left - this.offset.x) / this.viewScale, 0, BOARD_WIDTH),
+      y: clamp((event.clientY - rect.top - this.offset.y) / this.viewScale, 0, BOARD_HEIGHT),
+      pressure: event.pressure || 0.5
     };
   }
 
   worldToScreen(point) {
     return {
-      x: point.x * this.scale + this.offset.x,
-      y: point.y * this.scale + this.offset.y
+      x: point.x * this.viewScale + this.offset.x,
+      y: point.y * this.viewScale + this.offset.y
     };
   }
 
-  openTextEditor(point, type) {
-    if (this.textEditor) {
-      this.textEditor.remove();
-      this.textEditor = null;
-    }
-
-    const editor = document.createElement('div');
-    editor.className = 'text-editor';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.placeholder = type === 'sticky' ? 'Sticky note' : 'Text';
-
-    const actions = document.createElement('div');
-    actions.className = 'text-editor-actions';
-    const addBtn = document.createElement('button');
-    addBtn.type = 'button';
-    addBtn.className = 'btn btn-primary';
-    addBtn.textContent = 'Add';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'btn btn-ghost';
-    cancelBtn.textContent = 'Cancel';
-
-    actions.appendChild(addBtn);
-    actions.appendChild(cancelBtn);
-    editor.appendChild(input);
-    editor.appendChild(actions);
-
-    const screen = this.worldToScreen(point);
-    editor.style.left = `${screen.x}px`;
-    editor.style.top = `${screen.y}px`;
-    this.stage.appendChild(editor);
-    input.focus();
-
-    const commit = () => {
-      const text = input.value.trim();
-      if (!text) {
-        editor.remove();
-        this.textEditor = null;
-        return;
-      }
-
-      if (type === 'text') {
-        const payload = {
-          id: createId(),
-          text,
-          position: point,
-          color: this.color,
-          size: Math.max(this.size * 3, 14)
-        };
-        this.events.push({ type: 'text', ...payload });
-        this.socket.emit('board:text:add', { code: this.roomCode, text: payload });
-      } else {
-        const payload = {
-          id: createId(),
-          text,
-          position: point,
-          color: this.color
-        };
-        this.events.push({ type: 'sticky', ...payload });
-        this.socket.emit('board:sticky:add', {
-          code: this.roomCode,
-          sticky: payload
-        });
-      }
-
-      this.needsRender = true;
-      editor.remove();
-      this.textEditor = null;
-    };
-
-    addBtn.addEventListener('click', commit);
-    cancelBtn.addEventListener('click', () => {
-      editor.remove();
-      this.textEditor = null;
-    });
-    input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') commit();
-      if (event.key === 'Escape') {
-        editor.remove();
-        this.textEditor = null;
-      }
-    });
-
-    this.textEditor = editor;
+  addRemotePoints(strokeId, points = []) {
+    const stroke = this.events.find((event) => event.type === 'stroke' && event.id === strokeId);
+    if (!stroke || !Array.isArray(points) || !points.length) return;
+    stroke.points.push(...points);
+    this.needsRender = true;
   }
 
   onPointerDown(event) {
-    this.canvas.setPointerCapture(event.pointerId);
-    const point = this.screenToWorld({
-      x: event.offsetX,
-      y: event.offsetY
-    });
-
-    if (event.button === 1 || this.spacePressed) {
-      this.isPanning = true;
-      this.panStart = { x: event.clientX, y: event.clientY };
-      return;
+    if (event.button !== 0 && event.pointerType === 'mouse') return;
+    event.preventDefault();
+    try {
+      this.canvas.setPointerCapture?.(event.pointerId);
+    } catch (err) {
+      // Synthetic validation events and some touch stacks may not support capture.
     }
+    const point = this.pointerToWorld(event);
 
     if (['pencil', 'highlighter', 'eraser'].includes(this.tool)) {
       this.startStroke(point);
@@ -288,7 +188,7 @@ export class Whiteboard {
 
     if (['rect', 'ellipse'].includes(this.tool)) {
       this.previewShape = {
-        type: this.tool,
+        shapeType: this.tool,
         start: point,
         end: point,
         color: this.color,
@@ -298,35 +198,22 @@ export class Whiteboard {
       return;
     }
 
-    if (this.tool === 'text') {
-      this.openTextEditor(point, 'text');
-      return;
-    }
-
-    if (this.tool === 'sticky') {
-      this.openTextEditor(point, 'sticky');
-    }
+    if (this.tool === 'text') this.openTextEditor(point);
   }
 
   onPointerMove(event) {
-    const point = this.screenToWorld({
-      x: event.offsetX,
-      y: event.offsetY
-    });
-
-    if (this.isPanning && this.panStart) {
-      const dx = event.clientX - this.panStart.x;
-      const dy = event.clientY - this.panStart.y;
-      this.offset.x += dx;
-      this.offset.y += dy;
-      this.panStart = { x: event.clientX, y: event.clientY };
-      this.needsRender = true;
-      return;
-    }
+    if (!this.currentStroke && !this.previewShape) return;
+    event.preventDefault();
+    const point = this.pointerToWorld(event);
 
     if (this.currentStroke) {
-      this.addStrokePoint(point);
-      return;
+      const last = this.currentStroke.points[this.currentStroke.points.length - 1];
+      const dx = point.x - last.x;
+      const dy = point.y - last.y;
+      if (Math.hypot(dx, dy) < 1.8) return;
+      this.currentStroke.points.push(point);
+      this.pendingPoints.push(point);
+      this.needsRender = true;
     }
 
     if (this.previewShape) {
@@ -335,24 +222,18 @@ export class Whiteboard {
     }
   }
 
-  onPointerUp() {
-    if (this.isPanning) {
-      this.isPanning = false;
+  onPointerUp(event) {
+    if (event?.pointerId) {
+      try {
+        this.canvas.releasePointerCapture?.(event.pointerId);
+      } catch (err) {
+        // Capture may already be released.
+      }
     }
-
-    if (this.currentStroke) {
-      this.finishStroke();
-    }
+    if (this.currentStroke) this.finishStroke();
 
     if (this.previewShape) {
-      const shape = {
-        id: createId(),
-        shapeType: this.previewShape.type,
-        start: this.previewShape.start,
-        end: this.previewShape.end,
-        color: this.previewShape.color,
-        size: this.previewShape.size
-      };
+      const shape = { id: createId(), ...this.previewShape };
       this.events.push({ type: 'shape', ...shape });
       this.socket.emit('board:shape:add', { code: this.roomCode, shape });
       this.previewShape = null;
@@ -366,40 +247,82 @@ export class Whiteboard {
     const stroke = {
       id: createId(),
       color: this.color,
-      size: this.size,
+      size: this.tool === 'eraser' ? this.size * 3 : this.size,
       mode,
       points: [point]
     };
-
     this.currentStroke = stroke;
+    this.pendingPoints = [];
     this.events.push({ type: 'stroke', ...stroke });
-
     this.socket.emit('board:stroke:start', {
       code: this.roomCode,
-      stroke: {
-        id: stroke.id,
-        color: stroke.color,
-        size: stroke.size,
-        mode: stroke.mode,
-        point
-      }
+      stroke: { id: stroke.id, color: stroke.color, size: stroke.size, mode, point }
     });
-
     this.needsRender = true;
   }
 
-  addStrokePoint(point) {
-    this.currentStroke.points.push(point);
-    this.emitStrokePoint(point);
-    this.needsRender = true;
+  flushPoints() {
+    if (!this.currentStroke || !this.pendingPoints.length) return;
+    const points = this.pendingPoints.splice(0, this.pendingPoints.length);
+    this.socket.emit('board:stroke:points', {
+      code: this.roomCode,
+      strokeId: this.currentStroke.id,
+      points
+    });
   }
 
   finishStroke() {
+    this.flushPoints();
     this.socket.emit('board:stroke:end', {
       code: this.roomCode,
       strokeId: this.currentStroke.id
     });
     this.currentStroke = null;
+  }
+
+  openTextEditor(point) {
+    this.textEditor?.remove();
+    const editor = document.createElement('form');
+    editor.className = 'text-editor';
+    editor.innerHTML = `
+      <input type="text" maxlength="180" placeholder="Add text" autocomplete="off" />
+      <div class="text-editor-actions">
+        <button class="btn btn-ghost" type="button" data-cancel>Cancel</button>
+        <button class="btn btn-primary" type="submit">Add</button>
+      </div>
+    `;
+    const screen = this.worldToScreen(point);
+    editor.style.left = `${screen.x}px`;
+    editor.style.top = `${screen.y}px`;
+    this.stage.appendChild(editor);
+    this.textEditor = editor;
+
+    const input = editor.querySelector('input');
+    input.focus();
+
+    const close = () => {
+      editor.remove();
+      this.textEditor = null;
+    };
+
+    editor.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const value = input.value.trim();
+      if (!value) return close();
+      const text = {
+        id: createId(),
+        text: value,
+        position: point,
+        color: this.color,
+        size: Math.max(this.size * 4, 18)
+      };
+      this.events.push({ type: 'text', ...text });
+      this.socket.emit('board:text:add', { code: this.roomCode, text });
+      this.needsRender = true;
+      close();
+    });
+
+    editor.querySelector('[data-cancel]').addEventListener('click', close);
   }
 
   renderLoop() {
@@ -412,121 +335,88 @@ export class Whiteboard {
 
   render() {
     const ctx = this.ctx;
-    ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    ctx.restore();
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
     ctx.save();
-    ctx.setTransform(
-      this.dpr * this.scale,
-      0,
-      0,
-      this.dpr * this.scale,
-      this.offset.x * this.dpr,
-      this.offset.y * this.dpr
-    );
+    ctx.translate(this.offset.x, this.offset.y);
+    ctx.scale(this.viewScale, this.viewScale);
+    this.drawBoardBackground(ctx);
 
-    const lastClear = this.events
-      .map((event, index) => (event.type === 'clear' ? index : -1))
-      .reduce((acc, value) => Math.max(acc, value), -1);
-
-    const drawEvents = lastClear >= 0 ? this.events.slice(lastClear + 1) : this.events;
-
-    drawEvents.forEach((event) => {
-      if (event.type === 'stroke') this.drawStroke(event);
-      if (event.type === 'shape') this.drawShape(event);
-      if (event.type === 'text') this.drawText(event);
-      if (event.type === 'sticky') this.drawSticky(event);
-    });
-
-    if (this.previewShape) {
-      this.drawShape({
-        shapeType: this.previewShape.type,
-        start: this.previewShape.start,
-        end: this.previewShape.end,
-        color: this.previewShape.color,
-        size: this.previewShape.size
-      });
-    }
-
+    const clearIndex = lastClearIndex(this.events);
+    const drawable = clearIndex >= 0 ? this.events.slice(clearIndex + 1) : this.events;
+    drawable.forEach((event) => this.drawEvent(ctx, event));
+    if (this.previewShape) this.drawShape(ctx, this.previewShape);
     ctx.restore();
   }
 
-  drawStroke(stroke) {
-    const ctx = this.ctx;
-    if (stroke.points.length < 2) return;
+  drawBoardBackground(ctx) {
     ctx.save();
-    ctx.beginPath();
+    ctx.fillStyle = 'rgba(8, 13, 25, 0.74)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.lineWidth = 2;
+    ctx.fillRect(0, 0, BOARD_WIDTH, BOARD_HEIGHT);
+    ctx.strokeRect(0, 0, BOARD_WIDTH, BOARD_HEIGHT);
+    ctx.restore();
+  }
+
+  drawEvent(ctx, event) {
+    if (event.type === 'stroke') this.drawStroke(ctx, event);
+    if (event.type === 'shape') this.drawShape(ctx, event);
+    if (event.type === 'text') this.drawText(ctx, event);
+  }
+
+  drawStroke(ctx, stroke) {
+    if (!stroke.points?.length) return;
+    ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.lineWidth = stroke.size;
     ctx.strokeStyle = stroke.color;
-    if (stroke.mode === 'erase') {
-      ctx.globalCompositeOperation = 'destination-out';
-    } else if (stroke.mode === 'highlight') {
-      ctx.globalAlpha = 0.35;
-      ctx.globalCompositeOperation = 'source-over';
+    ctx.globalCompositeOperation = stroke.mode === 'erase' ? 'destination-out' : 'source-over';
+    ctx.globalAlpha = stroke.mode === 'highlight' ? 0.32 : 1;
+    ctx.beginPath();
+    const points = stroke.points;
+    ctx.moveTo(points[0].x, points[0].y);
+    if (points.length === 1) {
+      ctx.lineTo(points[0].x + 0.1, points[0].y + 0.1);
     } else {
-      ctx.globalCompositeOperation = 'source-over';
-    }
-
-    stroke.points.forEach((point, index) => {
-      if (index === 0) {
-        ctx.moveTo(point.x, point.y);
-      } else {
-        ctx.lineTo(point.x, point.y);
+      for (let i = 1; i < points.length - 1; i += 1) {
+        const midX = (points[i].x + points[i + 1].x) / 2;
+        const midY = (points[i].y + points[i + 1].y) / 2;
+        ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
       }
-    });
-
+      const last = points[points.length - 1];
+      ctx.lineTo(last.x, last.y);
+    }
     ctx.stroke();
     ctx.restore();
   }
 
-  drawShape(shape) {
-    const ctx = this.ctx;
+  drawShape(ctx, shape) {
     const x = Math.min(shape.start.x, shape.end.x);
     const y = Math.min(shape.start.y, shape.end.y);
     const width = Math.abs(shape.end.x - shape.start.x);
     const height = Math.abs(shape.end.y - shape.start.y);
-
     ctx.save();
     ctx.lineWidth = shape.size;
     ctx.strokeStyle = shape.color;
-
-    if (shape.shapeType === 'rect') {
-      ctx.strokeRect(x, y, width, height);
-    } else if (shape.shapeType === 'ellipse') {
+    if (shape.shapeType === 'rect') ctx.strokeRect(x, y, width, height);
+    if (shape.shapeType === 'ellipse') {
       ctx.beginPath();
       ctx.ellipse(x + width / 2, y + height / 2, width / 2, height / 2, 0, 0, Math.PI * 2);
       ctx.stroke();
     }
-
     ctx.restore();
   }
 
-  drawText(text) {
-    const ctx = this.ctx;
+  drawText(ctx, text) {
     ctx.save();
     ctx.fillStyle = text.color;
-    ctx.font = `${text.size}px 'Space Grotesk'`;
+    ctx.font = `600 ${text.size}px "Plus Jakarta Sans", sans-serif`;
+    ctx.textBaseline = 'top';
     ctx.fillText(text.text, text.position.x, text.position.y);
-    ctx.restore();
-  }
-
-  drawSticky(sticky) {
-    const ctx = this.ctx;
-    const width = 180;
-    const height = 120;
-    ctx.save();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
-    ctx.strokeStyle = sticky.color;
-    ctx.lineWidth = 2;
-    ctx.fillRect(sticky.position.x, sticky.position.y, width, height);
-    ctx.strokeRect(sticky.position.x, sticky.position.y, width, height);
-    ctx.fillStyle = '#e2e8f0';
-    ctx.font = '14px "Space Grotesk"';
-    ctx.fillText(sticky.text, sticky.position.x + 10, sticky.position.y + 24);
     ctx.restore();
   }
 }

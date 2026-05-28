@@ -4,8 +4,43 @@ const Room = require('../models/Room');
 const asyncHandler = require('../utils/asyncHandler');
 const { sanitizeString } = require('../utils/sanitize');
 const { initCloudinary } = require('../config/cloudinary');
+const config = require('../config/env');
+const logger = require('../utils/logger');
 
 const cloudinary = initCloudinary();
+const allowedMimeTypes = new Set(config.uploads.allowedMimeTypes);
+
+const extensionByMime = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'application/pdf': '.pdf',
+  'text/plain': '.txt',
+  'text/markdown': '.md'
+};
+
+const isValidSignature = (file) => {
+  const buffer = file.buffer || Buffer.alloc(0);
+  const header = buffer.subarray(0, 12);
+  if (file.mimetype === 'image/png') return header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (file.mimetype === 'image/jpeg') return header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
+  if (file.mimetype === 'image/gif') return header.toString('ascii', 0, 6) === 'GIF87a' || header.toString('ascii', 0, 6) === 'GIF89a';
+  if (file.mimetype === 'image/webp') return header.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP';
+  if (file.mimetype === 'application/pdf') return header.toString('ascii', 0, 5) === '%PDF-';
+  if (file.mimetype === 'text/plain' || file.mimetype === 'text/markdown') return !buffer.includes(0);
+  return false;
+};
+
+const sanitizeFileName = (name, mimeType) => {
+  const cleaned = sanitizeString(name || 'file')
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 140);
+  const fallback = `file${extensionByMime[mimeType] || ''}`;
+  return cleaned || fallback;
+};
 
 const uploadFile = asyncHandler(async (req, res) => {
   const { roomCode } = req.body;
@@ -13,6 +48,14 @@ const uploadFile = asyncHandler(async (req, res) => {
 
   if (!file) {
     return res.status(400).json({ message: 'No file uploaded' });
+  }
+
+  if (!allowedMimeTypes.has(file.mimetype)) {
+    return res.status(400).json({ message: 'Unsupported file type' });
+  }
+
+  if (!isValidSignature(file)) {
+    return res.status(400).json({ message: 'File content does not match its type' });
   }
 
   if (!roomCode) {
@@ -37,9 +80,10 @@ const uploadFile = asyncHandler(async (req, res) => {
     return res.status(500).json({ message: 'File storage is not configured' });
   }
 
-  const folder = process.env.CLOUDINARY_FOLDER || 'study-collab';
+  const folder = config.cloudinary.folder;
+  let uploadResult;
 
-  const uploadResult = await new Promise((resolve, reject) => {
+  uploadResult = await new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       {
         folder,
@@ -56,22 +100,38 @@ const uploadFile = asyncHandler(async (req, res) => {
     streamifier.createReadStream(file.buffer).pipe(uploadStream);
   });
 
-  const saved = await SavedFile.create({
-    room: room._id,
-    uploader: req.user._id,
-    originalName: file.originalname,
-    storedName: uploadResult.public_id,
-    mimeType: file.mimetype,
-    size: file.size,
-    url: uploadResult.secure_url,
-    cloudinaryId: uploadResult.public_id,
-    resourceType: uploadResult.resource_type
-  });
+  const safeName = sanitizeFileName(file.originalname, file.mimetype);
+
+  let saved;
+  try {
+    saved = await SavedFile.create({
+      room: room._id,
+      uploader: req.user._id,
+      originalName: safeName,
+      storedName: uploadResult.public_id,
+      mimeType: file.mimetype,
+      size: file.size,
+      url: uploadResult.secure_url,
+      cloudinaryId: uploadResult.public_id,
+      resourceType: uploadResult.resource_type
+    });
+  } catch (err) {
+    if (cloudinary && uploadResult?.public_id) {
+      await cloudinary.uploader.destroy(uploadResult.public_id, {
+        resource_type: uploadResult.resource_type || 'raw'
+      }).catch((cleanupErr) => {
+        logger.warn('cloudinary_duplicate_cleanup_failed', { error: cleanupErr.message });
+      });
+    }
+    throw err;
+  }
 
   return res.status(201).json({
     file: {
       id: saved._id,
       name: saved.originalName,
+      originalName: saved.originalName,
+      mimeType: saved.mimeType,
       size: saved.size,
       url: `/api/files/${saved._id}/download`
     }

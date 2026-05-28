@@ -5,11 +5,16 @@
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
-    "dev": "nodemon server/server.js"
+    "dev": "nodemon server/server.js",
+    "start:prod": "node -e \"process.env.NODE_ENV='production'; require('./server/server')\"",
+    "check": "node --check server/server.js && node --check server/socket/index.js && node --check server/config/env.js",
+    "check:prod-config": "node -e \"process.env.NODE_ENV='production'; try { require('./server/config/env'); console.log('production config ok'); } catch (err) { console.error(err.message); process.exit(1); }\"",
+    "health": "node -e \"fetch('http://localhost:'+(process.env.PORT||4000)+'/healthz').then(r=>r.text().then(t=>{console.log(r.status,t); process.exit(r.ok?0:1)})).catch(e=>{console.error(e.message); process.exit(1)})\""
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cloudinary": "^2.5.0",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",

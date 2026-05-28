@@ -11,7 +11,18 @@ const {
 } = require('../controllers/userController');
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const upload = multer({
+	storage: multer.memoryStorage(),
+	limits: { fileSize: 5 * 1024 * 1024 },
+	fileFilter: (req, file, cb) => {
+		if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.mimetype)) {
+			const err = new Error('Unsupported avatar type');
+			err.statusCode = 400;
+			return cb(err);
+		}
+		return cb(null, true);
+	}
+});
 
 router.get('/me', auth, getMe);
 router.put(

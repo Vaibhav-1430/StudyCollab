@@ -1,21 +1,24 @@
 const express = require('express');
+const config = require('../config/env');
 
 const router = express.Router();
 
 router.get('/webrtc', (req, res) => {
-  const iceServers = [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:global.stun.twilio.com:3478' }
-  ];
+  const iceServers = config.webrtc.stunUrls.map((url) => ({ urls: url }));
 
-  if (process.env.TURN_URLS && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
+  if (
+    config.webrtc.turnUrls.length &&
+    config.webrtc.turnUsername &&
+    config.webrtc.turnCredential
+  ) {
     iceServers.push({
-      urls: process.env.TURN_URLS.split(','),
-      username: process.env.TURN_USERNAME,
-      credential: process.env.TURN_CREDENTIAL
+      urls: config.webrtc.turnUrls,
+      username: config.webrtc.turnUsername,
+      credential: config.webrtc.turnCredential
     });
   }
 
+  res.setHeader('Cache-Control', 'no-store');
   return res.json({ iceServers });
 });
 

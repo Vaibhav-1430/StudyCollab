@@ -5,9 +5,13 @@ const Message = require('../models/Message');
 const WhiteboardSession = require('../models/WhiteboardSession');
 const { sanitizeString } = require('../utils/sanitize');
 const store = require('./store');
+const config = require('../config/env');
+const logger = require('../utils/logger');
 
 const roomState = new Map();
 const MAX_EVENTS = 5000;
+const MAX_POINTS_PER_BATCH = 80;
+const ROOM_TTL_MS = 6 * 60 * 60 * 1000;
 
 const getRoomState = (code) => {
   if (!roomState.has(code)) {
@@ -16,10 +20,13 @@ const getRoomState = (code) => {
       events: [],
       redo: [],
       annotations: new Map(),
-      screenPresenter: null
+      screenPresenter: null,
+      lastActiveAt: Date.now()
     });
   }
-  return roomState.get(code);
+  const state = roomState.get(code);
+  state.lastActiveAt = Date.now();
+  return state;
 };
 
 const trimEvents = (state) => {
@@ -55,6 +62,29 @@ const canAccessRoom = (room, userId) => {
 
 const socketInRoom = (socket, code) => socket.rooms.has(code);
 
+const touchRoom = (code) => {
+  const state = roomState.get(code);
+  if (state) state.lastActiveAt = Date.now();
+};
+
+const safePoint = (point) => {
+  if (!point || typeof point !== 'object') return null;
+  const x = Number(point.x);
+  const y = Number(point.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return {
+    x: Math.max(0, Math.min(x, 5000)),
+    y: Math.max(0, Math.min(y, 5000)),
+    pressure: Number.isFinite(Number(point.pressure)) ? Number(point.pressure) : 0.5
+  };
+};
+
+const safePoints = (points) =>
+  (Array.isArray(points) ? points : [])
+    .slice(0, MAX_POINTS_PER_BATCH)
+    .map(safePoint)
+    .filter(Boolean);
+
 module.exports = (io) => {
   io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token;
@@ -63,7 +93,7 @@ module.exports = (io) => {
     }
 
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const decoded = jwt.verify(token, config.jwt.secret);
       const user = await User.findById(decoded.id).select('name avatar status');
       if (!user) {
         return next(new Error('Unauthorized'));
@@ -90,6 +120,7 @@ module.exports = (io) => {
   io.on('connection', (socket) => {
     const user = socket.user;
     store.setUserSocket(user.id, socket.id);
+    logger.info('socket_connected', { socketId: socket.id, userId: user.id });
 
     socket.on('room:join', async ({ code }) => {
       const safeCode = safeRoomCode(code);
@@ -116,11 +147,14 @@ module.exports = (io) => {
         }
       }
 
-      const member = { ...user, socketId: socket.id };
+      const member = { ...user, socketId: socket.id, isMuted: false };
       state.members.set(socket.id, member);
 
       io.to(safeCode).emit('room:users', {
-        users: Array.from(state.members.values())
+        users: Array.from(state.members.values()).map((entry) => ({
+          ...entry,
+          isMuted: Boolean(entry.isMuted)
+        }))
       });
 
       socket.emit('board:sync-data', { events: state.events });
@@ -143,6 +177,7 @@ module.exports = (io) => {
       socket.leave(safeCode);
       const state = roomState.get(safeCode);
       if (state) {
+        touchRoom(safeCode);
         state.members.delete(socket.id);
         if (state.screenPresenter?.socketId === socket.id) {
           state.screenPresenter = null;
@@ -152,7 +187,10 @@ module.exports = (io) => {
           roomState.delete(safeCode);
         } else {
           io.to(safeCode).emit('room:users', {
-            users: Array.from(state.members.values())
+            users: Array.from(state.members.values()).map((entry) => ({
+              ...entry,
+              isMuted: Boolean(entry.isMuted)
+            }))
           });
           socket.to(safeCode).emit('room:user-left', {
             userId: user.id,
@@ -162,19 +200,26 @@ module.exports = (io) => {
       }
     });
 
-    socket.on('cursor:move', ({ code, x, y }) => {
+    socket.on('audio:mute', ({ code, muted }) => {
       const safeCode = safeRoomCode(code);
       if (!socketInRoom(socket, safeCode)) return;
-      socket.to(safeCode).emit('cursor:move', {
+      const state = getRoomState(safeCode);
+      const member = state.members.get(socket.id);
+      if (member) {
+        member.isMuted = Boolean(muted);
+      }
+      socket.to(safeCode).emit('audio:mute', {
         userId: user.id,
-        x,
-        y
+        socketId: socket.id,
+        muted: Boolean(muted)
       });
     });
 
     socket.on('board:stroke:start', ({ code, stroke }) => {
       const safeCode = safeRoomCode(code);
       if (!socketInRoom(socket, safeCode)) return;
+      const point = safePoint(stroke?.point);
+      if (!point) return;
       const state = getRoomState(safeCode);
       state.events.push({
         type: 'stroke',
@@ -182,24 +227,41 @@ module.exports = (io) => {
         color: stroke.color,
         size: stroke.size,
         mode: stroke.mode,
-        points: [stroke.point]
+        points: [point]
       });
       trimEvents(state);
       state.redo = [];
-      socket.to(safeCode).emit('board:stroke:start', { stroke });
+      socket.to(safeCode).emit('board:stroke:start', { stroke: { ...stroke, point } });
     });
 
     socket.on('board:stroke:point', ({ code, strokeId, point }) => {
       const safeCode = safeRoomCode(code);
       if (!socketInRoom(socket, safeCode)) return;
+      const cleanPoint = safePoint(point);
+      if (!cleanPoint) return;
       const state = getRoomState(safeCode);
       const event = state.events.find(
         (entry) => entry.type === 'stroke' && entry.id === strokeId
       );
       if (event) {
-        event.points.push(point);
+        event.points.push(cleanPoint);
       }
-      socket.to(safeCode).emit('board:stroke:point', { strokeId, point });
+      socket.to(safeCode).emit('board:stroke:point', { strokeId, point: cleanPoint });
+    });
+
+    socket.on('board:stroke:points', ({ code, strokeId, points }) => {
+      const safeCode = safeRoomCode(code);
+      if (!socketInRoom(socket, safeCode)) return;
+      const cleanPoints = safePoints(points);
+      if (!cleanPoints.length) return;
+      const state = getRoomState(safeCode);
+      const event = state.events.find(
+        (entry) => entry.type === 'stroke' && entry.id === strokeId
+      );
+      if (event) {
+        event.points.push(...cleanPoints);
+      }
+      socket.to(safeCode).emit('board:stroke:points', { strokeId, points: cleanPoints });
     });
 
     socket.on('board:stroke:end', ({ code, strokeId }) => {
@@ -280,104 +342,145 @@ module.exports = (io) => {
     socket.on('annot:stroke:start', ({ code, target, stroke }) => {
       const safeCode = safeRoomCode(code);
       if (!socketInRoom(socket, safeCode)) return;
+      const safeTarget = sanitizeString(target || 'screen').slice(0, 120);
+      const point = safePoint(stroke?.point);
+      if (!point) return;
       const state = getRoomState(safeCode);
-      const channel = getAnnotationState(state, target);
+      const channel = getAnnotationState(state, safeTarget);
       channel.events.push({
         type: 'stroke',
         id: stroke.id,
         color: stroke.color,
         size: stroke.size,
         mode: stroke.mode,
-        points: [stroke.point]
+        points: [point]
       });
       trimAnnotationEvents(channel);
       channel.redo = [];
-      socket.to(safeCode).emit('annot:stroke:start', { target, stroke });
+      socket.to(safeCode).emit('annot:stroke:start', {
+        target: safeTarget,
+        stroke: { ...stroke, point }
+      });
     });
 
     socket.on('annot:stroke:point', ({ code, target, strokeId, point }) => {
       const safeCode = safeRoomCode(code);
       if (!socketInRoom(socket, safeCode)) return;
+      const safeTarget = sanitizeString(target || 'screen').slice(0, 120);
+      const cleanPoint = safePoint(point);
+      if (!cleanPoint) return;
       const state = getRoomState(safeCode);
-      const channel = getAnnotationState(state, target);
+      const channel = getAnnotationState(state, safeTarget);
       const event = channel.events.find(
         (entry) => entry.type === 'stroke' && entry.id === strokeId
       );
       if (event) {
-        event.points.push(point);
+        event.points.push(cleanPoint);
       }
-      socket.to(safeCode).emit('annot:stroke:point', { target, strokeId, point });
+      socket.to(safeCode).emit('annot:stroke:point', {
+        target: safeTarget,
+        strokeId,
+        point: cleanPoint
+      });
+    });
+
+    socket.on('annot:stroke:points', ({ code, target, strokeId, points }) => {
+      const safeCode = safeRoomCode(code);
+      if (!socketInRoom(socket, safeCode)) return;
+      const safeTarget = sanitizeString(target || 'screen').slice(0, 120);
+      const cleanPoints = safePoints(points);
+      if (!cleanPoints.length) return;
+      const state = getRoomState(safeCode);
+      const channel = getAnnotationState(state, safeTarget);
+      const event = channel.events.find(
+        (entry) => entry.type === 'stroke' && entry.id === strokeId
+      );
+      if (event) {
+        event.points.push(...cleanPoints);
+      }
+      socket.to(safeCode).emit('annot:stroke:points', {
+        target: safeTarget,
+        strokeId,
+        points: cleanPoints
+      });
     });
 
     socket.on('annot:stroke:end', ({ code, target, strokeId }) => {
       const safeCode = safeRoomCode(code);
       if (!socketInRoom(socket, safeCode)) return;
-      socket.to(safeCode).emit('annot:stroke:end', { target, strokeId });
+      const safeTarget = sanitizeString(target || 'screen').slice(0, 120);
+      socket.to(safeCode).emit('annot:stroke:end', { target: safeTarget, strokeId });
     });
 
     socket.on('annot:shape:add', ({ code, target, shape }) => {
       const safeCode = safeRoomCode(code);
       if (!socketInRoom(socket, safeCode)) return;
+      const safeTarget = sanitizeString(target || 'screen').slice(0, 120);
       const state = getRoomState(safeCode);
-      const channel = getAnnotationState(state, target);
+      const channel = getAnnotationState(state, safeTarget);
       channel.events.push({ type: 'shape', ...shape });
       trimAnnotationEvents(channel);
       channel.redo = [];
-      socket.to(safeCode).emit('annot:shape:add', { target, shape });
+      socket.to(safeCode).emit('annot:shape:add', { target: safeTarget, shape });
     });
 
     socket.on('annot:text:add', ({ code, target, text }) => {
       const safeCode = safeRoomCode(code);
       if (!socketInRoom(socket, safeCode)) return;
+      const safeTarget = sanitizeString(target || 'screen').slice(0, 120);
       const state = getRoomState(safeCode);
-      const channel = getAnnotationState(state, target);
+      const channel = getAnnotationState(state, safeTarget);
       channel.events.push({ type: 'text', ...text });
       trimAnnotationEvents(channel);
       channel.redo = [];
-      socket.to(safeCode).emit('annot:text:add', { target, text });
+      socket.to(safeCode).emit('annot:text:add', { target: safeTarget, text });
     });
 
     socket.on('annot:clear', ({ code, target }) => {
       const safeCode = safeRoomCode(code);
       if (!socketInRoom(socket, safeCode)) return;
+      const safeTarget = sanitizeString(target || 'screen').slice(0, 120);
       const state = getRoomState(safeCode);
-      const channel = getAnnotationState(state, target);
+      const channel = getAnnotationState(state, safeTarget);
       channel.events.push({ type: 'clear', id: Date.now() });
       trimAnnotationEvents(channel);
       channel.redo = [];
-      io.to(safeCode).emit('annot:clear', { target });
+      io.to(safeCode).emit('annot:clear', { target: safeTarget });
     });
 
     socket.on('annot:undo', ({ code, target }) => {
       const safeCode = safeRoomCode(code);
       if (!socketInRoom(socket, safeCode)) return;
+      const safeTarget = sanitizeString(target || 'screen').slice(0, 120);
       const state = getRoomState(safeCode);
-      const channel = getAnnotationState(state, target);
+      const channel = getAnnotationState(state, safeTarget);
       const last = channel.events.pop();
       if (last) {
         channel.redo.push(last);
       }
-      io.to(safeCode).emit('annot:sync-data', { target, events: channel.events });
+      io.to(safeCode).emit('annot:sync-data', { target: safeTarget, events: channel.events });
     });
 
     socket.on('annot:redo', ({ code, target }) => {
       const safeCode = safeRoomCode(code);
       if (!socketInRoom(socket, safeCode)) return;
+      const safeTarget = sanitizeString(target || 'screen').slice(0, 120);
       const state = getRoomState(safeCode);
-      const channel = getAnnotationState(state, target);
+      const channel = getAnnotationState(state, safeTarget);
       const redo = channel.redo.pop();
       if (redo) {
         channel.events.push(redo);
       }
-      io.to(safeCode).emit('annot:sync-data', { target, events: channel.events });
+      io.to(safeCode).emit('annot:sync-data', { target: safeTarget, events: channel.events });
     });
 
     socket.on('annot:sync-request', ({ code, target }) => {
       const safeCode = safeRoomCode(code);
       if (!socketInRoom(socket, safeCode)) return;
+      const safeTarget = sanitizeString(target || 'screen').slice(0, 120);
       const state = getRoomState(safeCode);
-      const channel = getAnnotationState(state, target);
-      socket.emit('annot:sync-data', { target, events: channel.events });
+      const channel = getAnnotationState(state, safeTarget);
+      socket.emit('annot:sync-data', { target: safeTarget, events: channel.events });
     });
 
     socket.on('screen:share:started', ({ code }) => {
@@ -465,6 +568,7 @@ module.exports = (io) => {
     });
 
     socket.on('webrtc:offer', ({ targetId, sdp }) => {
+      if (!targetId || !sdp?.type) return;
       io.to(targetId).emit('webrtc:offer', {
         fromId: socket.id,
         sdp,
@@ -473,10 +577,12 @@ module.exports = (io) => {
     });
 
     socket.on('webrtc:answer', ({ targetId, sdp }) => {
+      if (!targetId || !sdp?.type) return;
       io.to(targetId).emit('webrtc:answer', { fromId: socket.id, sdp });
     });
 
     socket.on('webrtc:candidate', ({ targetId, candidate }) => {
+      if (!targetId || !candidate) return;
       io.to(targetId).emit('webrtc:candidate', {
         fromId: socket.id,
         candidate
@@ -484,6 +590,7 @@ module.exports = (io) => {
     });
 
     socket.on('disconnect', async () => {
+      logger.info('socket_disconnected', { socketId: socket.id, userId: user.id });
       store.removeSocket(socket.id);
 
       for (const [code, state] of roomState.entries()) {
@@ -497,7 +604,10 @@ module.exports = (io) => {
             roomState.delete(code);
           } else {
             io.to(code).emit('room:users', {
-              users: Array.from(state.members.values())
+              users: Array.from(state.members.values()).map((entry) => ({
+                ...entry,
+                isMuted: Boolean(entry.isMuted)
+              }))
             });
             io.to(code).emit('room:user-left', {
               userId: user.id,
@@ -513,4 +623,14 @@ module.exports = (io) => {
       );
     });
   });
+
+  setInterval(() => {
+    const now = Date.now();
+    for (const [code, state] of roomState.entries()) {
+      if (state.members.size === 0 && now - state.lastActiveAt > ROOM_TTL_MS) {
+        roomState.delete(code);
+        logger.info('socket_room_pruned', { code });
+      }
+    }
+  }, 15 * 60 * 1000).unref();
 };

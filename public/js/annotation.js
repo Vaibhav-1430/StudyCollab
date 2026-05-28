@@ -1,85 +1,74 @@
-import { throttle } from './utils.js';
-
 const createId = () =>
   (window.crypto?.randomUUID && window.crypto.randomUUID()) ||
   `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+const drawableEvents = (events) => {
+  const clearIndex = events.reduce(
+    (latest, event, index) => (event.type === 'clear' ? index : latest),
+    -1
+  );
+  return clearIndex >= 0 ? events.slice(clearIndex + 1) : events;
+};
+
 export class AnnotationLayer {
-  constructor(canvas, stage, socket, roomCode, target) {
+  constructor(canvas, stage, socket, roomCode, options = {}) {
     this.canvas = canvas;
     this.stage = stage;
     this.socket = socket;
     this.roomCode = roomCode;
-    this.target = target || 'screen';
-    this.ctx = canvas.getContext('2d');
+    this.target = typeof options === 'string' ? options : options.target || 'screen';
+    this.reference = typeof options === 'object' ? options.reference : null;
+    this.ctx = canvas.getContext('2d', { alpha: true });
 
     this.tool = 'pencil';
     this.color = '#6ee7ff';
-    this.size = 4;
+    this.size = 5;
     this.dpr = window.devicePixelRatio || 1;
-
+    this.rect = { width: 1, height: 1 };
+    this.enabled = true;
     this.events = [];
-    this.redo = [];
     this.currentStroke = null;
+    this.pendingPoints = [];
     this.previewShape = null;
     this.textEditor = null;
-    this.isDrawing = false;
-    this.enabled = true;
-
-    this.emitStrokePoint = throttle((point) => {
-      if (!this.currentStroke) return;
-      this.socket.emit('annot:stroke:point', {
-        code: this.roomCode,
-        target: this.target,
-        strokeId: this.currentStroke.id,
-        point
-      });
-    }, 16);
-
     this.needsRender = true;
+    this.resizeObserver = new ResizeObserver(() => this.resizeCanvas());
+
+    this.flushPoints = this.flushPoints.bind(this);
+    this.flushTimer = window.setInterval(this.flushPoints, 28);
 
     this.resizeCanvas();
+    this.resizeObserver.observe(this.stage);
     this.bindEvents();
     this.attachSocket();
     this.renderLoop();
   }
 
   bindEvents() {
-    window.addEventListener('resize', () => this.resizeCanvas());
-
-    this.canvas.addEventListener('pointerdown', (event) =>
-      this.onPointerDown(event)
-    );
-    this.canvas.addEventListener('pointermove', (event) =>
-      this.onPointerMove(event)
-    );
-    this.canvas.addEventListener('pointerup', () => this.onPointerUp());
-    this.canvas.addEventListener('pointerleave', () => this.onPointerUp());
+    this.canvas.addEventListener('pointerdown', (event) => this.onPointerDown(event));
+    this.canvas.addEventListener('pointermove', (event) => this.onPointerMove(event));
+    this.canvas.addEventListener('pointerup', (event) => this.onPointerUp(event));
+    this.canvas.addEventListener('pointercancel', (event) => this.onPointerUp(event));
+    this.canvas.addEventListener('pointerleave', (event) => this.onPointerUp(event));
   }
 
   attachSocket() {
     this.socket.on('annot:stroke:start', ({ target, stroke }) => {
       if (target !== this.target) return;
-      this.events.push({
-        type: 'stroke',
-        id: stroke.id,
-        color: stroke.color,
-        size: stroke.size,
-        mode: stroke.mode,
-        points: [stroke.point]
-      });
+      this.events.push({ type: 'stroke', ...stroke, points: [stroke.point] });
       this.needsRender = true;
     });
 
     this.socket.on('annot:stroke:point', ({ target, strokeId, point }) => {
       if (target !== this.target) return;
-      const stroke = this.events.find(
-        (event) => event.type === 'stroke' && event.id === strokeId
-      );
-      if (stroke) {
-        stroke.points.push(point);
-        this.needsRender = true;
-      }
+      this.addRemotePoints(strokeId, [point]);
+    });
+
+    this.socket.on('annot:stroke:points', ({ target, strokeId, points }) => {
+      if (target !== this.target) return;
+      this.addRemotePoints(strokeId, points);
     });
 
     this.socket.on('annot:shape:add', ({ target, shape }) => {
@@ -96,8 +85,7 @@ export class AnnotationLayer {
 
     this.socket.on('annot:clear', ({ target }) => {
       if (target !== this.target) return;
-      this.events.push({ type: 'clear', id: Date.now() });
-      this.redo = [];
+      this.events.push({ type: 'clear', id: createId() });
       this.needsRender = true;
     });
 
@@ -108,17 +96,20 @@ export class AnnotationLayer {
   }
 
   setTarget(target) {
+    if (this.target === target) return;
     this.target = target;
+    this.loadEvents([]);
     this.requestSync();
   }
 
   setEnabled(enabled) {
-    this.enabled = enabled;
-    this.canvas.style.pointerEvents = enabled ? 'auto' : 'none';
+    this.enabled = Boolean(enabled);
+    this.canvas.style.pointerEvents = this.enabled ? 'auto' : 'none';
   }
 
   setTool(tool) {
-    this.tool = tool;
+    this.tool = tool === 'sticky' ? 'text' : tool;
+    this.canvas.dataset.tool = this.tool;
   }
 
   setColor(color) {
@@ -126,7 +117,7 @@ export class AnnotationLayer {
   }
 
   setSize(size) {
-    this.size = size;
+    this.size = clamp(Number(size) || 5, 1, 36);
   }
 
   undo() {
@@ -142,107 +133,59 @@ export class AnnotationLayer {
   }
 
   requestSync() {
-    this.socket.emit('annot:sync-request', {
-      code: this.roomCode,
-      target: this.target
-    });
+    if (!this.socket.connected) return;
+    this.socket.emit('annot:sync-request', { code: this.roomCode, target: this.target });
   }
 
   loadEvents(events = []) {
     this.events = Array.isArray(events) ? events : [];
-    this.redo = [];
     this.needsRender = true;
   }
 
   resizeCanvas() {
-    const { width, height } = this.stage.getBoundingClientRect();
+    const rect = this.stage.getBoundingClientRect();
+    this.rect = {
+      width: Math.max(1, rect.width),
+      height: Math.max(1, rect.height)
+    };
     this.dpr = window.devicePixelRatio || 1;
-    this.canvas.width = width * this.dpr;
-    this.canvas.height = height * this.dpr;
-    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.canvas.width = Math.round(this.rect.width * this.dpr);
+    this.canvas.height = Math.round(this.rect.height * this.dpr);
     this.needsRender = true;
   }
 
-  openTextEditor(point) {
-    if (this.textEditor) {
-      this.textEditor.remove();
-      this.textEditor = null;
-    }
-
-    const editor = document.createElement('div');
-    editor.className = 'text-editor';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.placeholder = 'Add note';
-
-    const actions = document.createElement('div');
-    actions.className = 'text-editor-actions';
-    const addBtn = document.createElement('button');
-    addBtn.type = 'button';
-    addBtn.className = 'btn btn-primary';
-    addBtn.textContent = 'Add';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'btn btn-ghost';
-    cancelBtn.textContent = 'Cancel';
-
-    actions.appendChild(addBtn);
-    actions.appendChild(cancelBtn);
-    editor.appendChild(input);
-    editor.appendChild(actions);
-
-    editor.style.left = `${point.x}px`;
-    editor.style.top = `${point.y}px`;
-    this.stage.appendChild(editor);
-    input.focus();
-
-    const commit = () => {
-      const text = input.value.trim();
-      if (!text) {
-        editor.remove();
-        this.textEditor = null;
-        return;
-      }
-
-      const payload = {
-        id: createId(),
-        text,
-        position: point,
-        color: this.color,
-        size: Math.max(this.size * 3, 14)
-      };
-      this.events.push({ type: 'text', ...payload });
-      this.socket.emit('annot:text:add', {
-        code: this.roomCode,
-        target: this.target,
-        text: payload
-      });
-
-      this.needsRender = true;
-      editor.remove();
-      this.textEditor = null;
+  pointerToNormalized(event) {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
+      y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
+      pressure: event.pressure || 0.5
     };
+  }
 
-    addBtn.addEventListener('click', commit);
-    cancelBtn.addEventListener('click', () => {
-      editor.remove();
-      this.textEditor = null;
-    });
-    input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') commit();
-      if (event.key === 'Escape') {
-        editor.remove();
-        this.textEditor = null;
-      }
-    });
+  toScreen(point) {
+    return {
+      x: point.x * this.rect.width,
+      y: point.y * this.rect.height
+    };
+  }
 
-    this.textEditor = editor;
+  addRemotePoints(strokeId, points = []) {
+    const stroke = this.events.find((event) => event.type === 'stroke' && event.id === strokeId);
+    if (!stroke || !Array.isArray(points) || !points.length) return;
+    stroke.points.push(...points);
+    this.needsRender = true;
   }
 
   onPointerDown(event) {
-    if (!this.enabled) return;
-    this.canvas.setPointerCapture(event.pointerId);
-    const point = { x: event.offsetX, y: event.offsetY };
+    if (!this.enabled || (event.button !== 0 && event.pointerType === 'mouse')) return;
+    event.preventDefault();
+    try {
+      this.canvas.setPointerCapture?.(event.pointerId);
+    } catch (err) {
+      // Synthetic validation events and some touch stacks may not support capture.
+    }
+    const point = this.pointerToNormalized(event);
 
     if (['pencil', 'highlighter', 'eraser'].includes(this.tool)) {
       this.startStroke(point);
@@ -251,7 +194,7 @@ export class AnnotationLayer {
 
     if (['rect', 'ellipse'].includes(this.tool)) {
       this.previewShape = {
-        type: this.tool,
+        shapeType: this.tool,
         start: point,
         end: point,
         color: this.color,
@@ -261,18 +204,22 @@ export class AnnotationLayer {
       return;
     }
 
-    if (this.tool === 'text') {
-      this.openTextEditor(point);
-    }
+    if (this.tool === 'text') this.openTextEditor(point);
   }
 
   onPointerMove(event) {
-    if (!this.enabled) return;
-    const point = { x: event.offsetX, y: event.offsetY };
+    if (!this.enabled || (!this.currentStroke && !this.previewShape)) return;
+    event.preventDefault();
+    const point = this.pointerToNormalized(event);
 
     if (this.currentStroke) {
-      this.addStrokePoint(point);
-      return;
+      const last = this.currentStroke.points[this.currentStroke.points.length - 1];
+      const dx = (point.x - last.x) * this.rect.width;
+      const dy = (point.y - last.y) * this.rect.height;
+      if (Math.hypot(dx, dy) < 1.8) return;
+      this.currentStroke.points.push(point);
+      this.pendingPoints.push(point);
+      this.needsRender = true;
     }
 
     if (this.previewShape) {
@@ -281,26 +228,20 @@ export class AnnotationLayer {
     }
   }
 
-  onPointerUp() {
-    if (this.currentStroke) {
-      this.finishStroke();
+  onPointerUp(event) {
+    if (event?.pointerId) {
+      try {
+        this.canvas.releasePointerCapture?.(event.pointerId);
+      } catch (err) {
+        // Capture may already be released.
+      }
     }
+    if (this.currentStroke) this.finishStroke();
 
     if (this.previewShape) {
-      const shape = {
-        id: createId(),
-        shapeType: this.previewShape.type,
-        start: this.previewShape.start,
-        end: this.previewShape.end,
-        color: this.previewShape.color,
-        size: this.previewShape.size
-      };
+      const shape = { id: createId(), ...this.previewShape };
       this.events.push({ type: 'shape', ...shape });
-      this.socket.emit('annot:shape:add', {
-        code: this.roomCode,
-        target: this.target,
-        shape
-      });
+      this.socket.emit('annot:shape:add', { code: this.roomCode, target: this.target, shape });
       this.previewShape = null;
       this.needsRender = true;
     }
@@ -312,42 +253,88 @@ export class AnnotationLayer {
     const stroke = {
       id: createId(),
       color: this.color,
-      size: this.size,
+      size: this.tool === 'eraser' ? this.size * 3 : this.size,
       mode,
       points: [point]
     };
-
     this.currentStroke = stroke;
+    this.pendingPoints = [];
     this.events.push({ type: 'stroke', ...stroke });
-
     this.socket.emit('annot:stroke:start', {
       code: this.roomCode,
       target: this.target,
-      stroke: {
-        id: stroke.id,
-        color: stroke.color,
-        size: stroke.size,
-        mode: stroke.mode,
-        point
-      }
+      stroke: { id: stroke.id, color: stroke.color, size: stroke.size, mode, point }
     });
-
     this.needsRender = true;
   }
 
-  addStrokePoint(point) {
-    this.currentStroke.points.push(point);
-    this.emitStrokePoint(point);
-    this.needsRender = true;
+  flushPoints() {
+    if (!this.currentStroke || !this.pendingPoints.length) return;
+    const points = this.pendingPoints.splice(0, this.pendingPoints.length);
+    this.socket.emit('annot:stroke:points', {
+      code: this.roomCode,
+      target: this.target,
+      strokeId: this.currentStroke.id,
+      points
+    });
   }
 
   finishStroke() {
+    this.flushPoints();
     this.socket.emit('annot:stroke:end', {
       code: this.roomCode,
       target: this.target,
       strokeId: this.currentStroke.id
     });
     this.currentStroke = null;
+  }
+
+  openTextEditor(point) {
+    this.textEditor?.remove();
+    const editor = document.createElement('form');
+    editor.className = 'text-editor';
+    editor.innerHTML = `
+      <input type="text" maxlength="160" placeholder="Add annotation" autocomplete="off" />
+      <div class="text-editor-actions">
+        <button class="btn btn-ghost" type="button" data-cancel>Cancel</button>
+        <button class="btn btn-primary" type="submit">Add</button>
+      </div>
+    `;
+    const screen = this.toScreen(point);
+    editor.style.left = `${screen.x}px`;
+    editor.style.top = `${screen.y}px`;
+    this.stage.appendChild(editor);
+    this.textEditor = editor;
+
+    const input = editor.querySelector('input');
+    input.focus();
+    const close = () => {
+      editor.remove();
+      this.textEditor = null;
+    };
+
+    editor.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const value = input.value.trim();
+      if (!value) return close();
+      const text = {
+        id: createId(),
+        text: value,
+        position: point,
+        color: this.color,
+        size: Math.max(this.size * 4, 18)
+      };
+      this.events.push({ type: 'text', ...text });
+      this.socket.emit('annot:text:add', {
+        code: this.roomCode,
+        target: this.target,
+        text
+      });
+      this.needsRender = true;
+      close();
+    });
+
+    editor.querySelector('[data-cancel]').addEventListener('click', close);
   }
 
   renderLoop() {
@@ -360,92 +347,72 @@ export class AnnotationLayer {
 
   render() {
     const ctx = this.ctx;
-    ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    ctx.restore();
-
-    const lastClear = this.events
-      .map((event, index) => (event.type === 'clear' ? index : -1))
-      .reduce((acc, value) => Math.max(acc, value), -1);
-    const drawEvents = lastClear >= 0 ? this.events.slice(lastClear + 1) : this.events;
-
-    drawEvents.forEach((event) => {
-      if (event.type === 'stroke') this.drawStroke(event);
-      if (event.type === 'shape') this.drawShape(event);
-      if (event.type === 'text') this.drawText(event);
-    });
-
-    if (this.previewShape) {
-      this.drawShape({
-        shapeType: this.previewShape.type,
-        start: this.previewShape.start,
-        end: this.previewShape.end,
-        color: this.previewShape.color,
-        size: this.previewShape.size
-      });
-    }
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    drawableEvents(this.events).forEach((event) => this.drawEvent(ctx, event));
+    if (this.previewShape) this.drawShape(ctx, this.previewShape);
   }
 
-  drawStroke(stroke) {
-    const ctx = this.ctx;
-    if (stroke.points.length < 2) return;
+  drawEvent(ctx, event) {
+    if (event.type === 'stroke') this.drawStroke(ctx, event);
+    if (event.type === 'shape') this.drawShape(ctx, event);
+    if (event.type === 'text') this.drawText(ctx, event);
+  }
+
+  drawStroke(ctx, stroke) {
+    if (!stroke.points?.length) return;
+    const points = stroke.points.map((point) => this.toScreen(point));
     ctx.save();
-    ctx.beginPath();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.lineWidth = stroke.size;
     ctx.strokeStyle = stroke.color;
-
-    if (stroke.mode === 'erase') {
-      ctx.globalCompositeOperation = 'destination-out';
-    } else if (stroke.mode === 'highlight') {
-      ctx.globalAlpha = 0.35;
-      ctx.globalCompositeOperation = 'source-over';
+    ctx.globalCompositeOperation = stroke.mode === 'erase' ? 'destination-out' : 'source-over';
+    ctx.globalAlpha = stroke.mode === 'highlight' ? 0.3 : 1;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    if (points.length === 1) {
+      ctx.lineTo(points[0].x + 0.1, points[0].y + 0.1);
     } else {
-      ctx.globalCompositeOperation = 'source-over';
-    }
-
-    stroke.points.forEach((point, index) => {
-      if (index === 0) {
-        ctx.moveTo(point.x, point.y);
-      } else {
-        ctx.lineTo(point.x, point.y);
+      for (let i = 1; i < points.length - 1; i += 1) {
+        const midX = (points[i].x + points[i + 1].x) / 2;
+        const midY = (points[i].y + points[i + 1].y) / 2;
+        ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
       }
-    });
-
+      const last = points[points.length - 1];
+      ctx.lineTo(last.x, last.y);
+    }
     ctx.stroke();
     ctx.restore();
   }
 
-  drawShape(shape) {
-    const ctx = this.ctx;
-    const x = Math.min(shape.start.x, shape.end.x);
-    const y = Math.min(shape.start.y, shape.end.y);
-    const width = Math.abs(shape.end.x - shape.start.x);
-    const height = Math.abs(shape.end.y - shape.start.y);
-
+  drawShape(ctx, shape) {
+    const start = this.toScreen(shape.start);
+    const end = this.toScreen(shape.end);
+    const x = Math.min(start.x, end.x);
+    const y = Math.min(start.y, end.y);
+    const width = Math.abs(end.x - start.x);
+    const height = Math.abs(end.y - start.y);
     ctx.save();
     ctx.lineWidth = shape.size;
     ctx.strokeStyle = shape.color;
-
-    if (shape.shapeType === 'rect') {
-      ctx.strokeRect(x, y, width, height);
-    } else if (shape.shapeType === 'ellipse') {
+    if (shape.shapeType === 'rect') ctx.strokeRect(x, y, width, height);
+    if (shape.shapeType === 'ellipse') {
       ctx.beginPath();
       ctx.ellipse(x + width / 2, y + height / 2, width / 2, height / 2, 0, 0, Math.PI * 2);
       ctx.stroke();
     }
-
     ctx.restore();
   }
 
-  drawText(text) {
-    const ctx = this.ctx;
+  drawText(ctx, text) {
+    const position = this.toScreen(text.position);
     ctx.save();
     ctx.fillStyle = text.color;
-    ctx.font = `${text.size}px 'Space Grotesk'`;
-    ctx.fillText(text.text, text.position.x, text.position.y);
+    ctx.font = `600 ${text.size}px "Plus Jakarta Sans", sans-serif`;
+    ctx.textBaseline = 'top';
+    ctx.fillText(text.text, position.x, position.y);
     ctx.restore();
   }
 }

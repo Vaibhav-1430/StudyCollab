@@ -4,152 +4,128 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Study Room - StudyCollab</title>
-    <script>
-      (function () {
-        var base = document.createElement('base');
-        base.href = location.pathname.includes('/public/') ? '/public/' : '/';
-        document.head.appendChild(base);
-      })();
-    </script>
     <link rel="stylesheet" href="/css/base.css" />
     <link rel="stylesheet" href="/css/components.css" />
     <link rel="stylesheet" href="/css/room.css" />
   </head>
-  <body>
-    <div class="page-loader" id="pageLoader">
-      <div class="spinner"></div>
-    </div>
-    <script>
-      (function () {
-        var done = false;
-        function dismiss() {
-          if (done) return;
-          done = true;
-          var el = document.getElementById('pageLoader');
-          if (!el) return;
-          el.classList.add('hidden');
-          setTimeout(function () {
-            try {
-              el.remove();
-            } catch (e) {}
-          }, 450);
-        }
-        document.addEventListener('DOMContentLoaded', dismiss, { once: true });
-        setTimeout(dismiss, 500);
-      })();
-    </script>
-    <div class="bg-orbs"></div>
+  <body class="room-body">
     <div class="room-shell">
-      <aside class="room-sidebar">
-        <button class="tool-btn" id="toolPencil" title="Pencil">P</button>
-        <button class="tool-btn" id="toolHighlighter" title="Highlighter">H</button>
-        <button class="tool-btn" id="toolEraser" title="Eraser">E</button>
-        <button class="tool-btn" id="toolRect" title="Rectangle">R</button>
-        <button class="tool-btn" id="toolEllipse" title="Ellipse">O</button>
-        <button class="tool-btn" id="toolText" title="Text">T</button>
-        <button class="tool-btn" id="toolSticky" title="Sticky">S</button>
+      <header class="room-topbar">
+        <div class="room-identity">
+          <span class="room-kicker">StudyCollab</span>
+          <h1 id="roomTitle">Room</h1>
+          <div class="room-code-row">
+            <span class="badge" id="roomCodeBadge"></span>
+            <button class="btn btn-ghost compact" id="copyCodeBtn">Share</button>
+          </div>
+        </div>
+        <div class="mode-toggle" id="modeToggle">
+          <button class="btn btn-ghost active" data-mode="screen">Screen</button>
+          <button class="btn btn-ghost" data-mode="whiteboard">Whiteboard</button>
+          <button class="btn btn-ghost" data-mode="presentation">Annotate</button>
+        </div>
+        <div class="topbar-actions">
+          <button class="btn btn-ghost" id="muteBtn">Mute</button>
+          <button class="btn btn-primary" id="shareScreenBtn">Share screen</button>
+          <button class="btn btn-ghost" id="saveBoardBtn">Save board</button>
+          <button class="btn btn-outline" id="leaveRoomBtn">Leave</button>
+        </div>
+      </header>
+
+      <aside class="room-left">
+        <section class="side-panel participants-panel">
+          <div class="panel-heading">
+            <h2>Participants</h2>
+            <span class="badge" id="latencyBadge">Low latency</span>
+          </div>
+          <div class="participants-list" id="participantsList"></div>
+          <label class="audio-device">
+            <span>Microphone</span>
+            <select class="select" id="audioInputSelect"></select>
+          </label>
+        </section>
       </aside>
 
       <main class="room-main">
-        <div class="room-topbar">
-          <div>
-            <h2 id="roomTitle">Room</h2>
-            <div style="display:flex; gap:8px; align-items:center; flex-wrap: wrap;">
-              <span class="badge" id="roomCodeBadge"></span>
-              <button class="btn btn-ghost" id="copyCodeBtn">Copy code</button>
-            </div>
-          </div>
-          <div class="mode-toggle" id="modeToggle">
-            <button class="btn btn-ghost active" data-mode="screen">Screen</button>
-            <button class="btn btn-ghost" data-mode="whiteboard">Whiteboard</button>
-            <button class="btn btn-ghost" data-mode="presentation">Present</button>
-          </div>
-          <div style="display: flex; gap: 10px; flex-wrap: wrap">
-            <button class="btn btn-ghost" id="saveBoardBtn">Save board</button>
-            <button class="btn btn-ghost" id="uploadFileBtn">Upload file</button>
-            <button class="btn btn-outline" id="leaveRoomBtn">Leave room</button>
-          </div>
-        </div>
-
         <div class="workspace" id="workspace">
           <section class="screen-stage active" id="screenStage">
             <div class="screen-shell">
               <video id="screenVideo" autoplay playsinline muted></video>
               <canvas class="screen-canvas" id="screenCanvas"></canvas>
               <div class="screen-placeholder" id="screenPlaceholder">
-                <h3>Screen share ready</h3>
-                <p>Share your screen to teach, annotate, and collaborate live.</p>
-                <button class="btn btn-primary" id="startShareBtn">Start sharing</button>
+                <div class="empty-state">
+                  <span class="empty-icon">SCREEN</span>
+                  <h2>Screen share workspace</h2>
+                  <p>Start sharing to turn this room into a live review surface.</p>
+                  <button class="btn btn-primary" id="startShareBtn">Start sharing</button>
+                </div>
               </div>
               <div class="presenter-badge" id="presenterBadge">Presenter</div>
             </div>
-            <div class="floating-media" id="remoteMedia"></div>
+            <div class="audio-media" id="audioMedia" aria-hidden="true"></div>
           </section>
 
           <section class="board-stage" id="boardStage">
             <canvas class="board-canvas" id="boardCanvas"></canvas>
-            <div class="cursor-layer" id="cursorLayer"></div>
-            <div class="live-indicator">Live</div>
+            <div class="live-indicator">Live board</div>
           </section>
 
           <div class="workspace-toolbar" id="workspaceToolbar">
-            <div class="toolbar-group">
-              <button class="btn btn-ghost" id="annotateToggleBtn">Annotate</button>
-              <input type="color" id="colorPicker" value="#6ee7ff" />
-              <input type="range" id="strokeSize" min="1" max="20" value="4" />
+            <div class="toolbar-group tools">
+              <button class="tool-btn" id="toolPencil" title="Pencil">Pen</button>
+              <button class="tool-btn" id="toolHighlighter" title="Highlighter">Hi</button>
+              <button class="tool-btn" id="toolEraser" title="Eraser">Erase</button>
+              <button class="tool-btn" id="toolRect" title="Rectangle">Rect</button>
+              <button class="tool-btn" id="toolEllipse" title="Ellipse">Oval</button>
+              <button class="tool-btn" id="toolText" title="Text">Text</button>
             </div>
             <div class="toolbar-group">
-              <button class="btn btn-ghost" id="undoBtn">Undo</button>
-              <button class="btn btn-ghost" id="redoBtn">Redo</button>
-              <button class="btn btn-danger" id="clearBtn">Clear</button>
+              <input type="color" id="colorPicker" value="#6ee7ff" title="Color" />
+              <input type="range" id="strokeSize" min="1" max="24" value="5" title="Brush size" />
+            </div>
+            <div class="toolbar-group">
+              <button class="btn btn-ghost compact" id="undoBtn">Undo</button>
+              <button class="btn btn-ghost compact" id="redoBtn">Redo</button>
+              <button class="btn btn-danger compact" id="clearBtn">Clear</button>
             </div>
             <div class="toolbar-group" id="whiteboardZoomGroup">
-              <button class="btn btn-outline" id="zoomInBtn">+</button>
-              <button class="btn btn-outline" id="zoomOutBtn">-</button>
+              <button class="btn btn-outline compact" id="zoomInBtn">+</button>
+              <button class="btn btn-outline compact" id="zoomOutBtn">-</button>
             </div>
-          </div>
-        </div>
-
-        <div class="board-footer">
-          <div class="toolbar-group">
-            <button class="btn btn-ghost" id="muteBtn">Mute</button>
-            <button class="btn btn-ghost" id="shareScreenBtn">Share screen</button>
-          </div>
-          <div class="toolbar-group">
-            <span class="badge" id="latencyBadge">Low latency</span>
           </div>
         </div>
       </main>
 
       <aside class="room-right">
-        <div class="chat-panel">
-          <div>
-            <h3>Chat</h3>
-            <div id="typingIndicator" class="muted"></div>
+        <section class="side-panel chat-panel">
+          <div class="panel-heading">
+            <h2>Chat</h2>
+            <span id="typingIndicator" class="muted"></span>
           </div>
           <div class="chat-messages" id="chatMessages"></div>
-          <form id="chatForm" style="display: flex; gap: 8px">
+          <form id="chatForm" class="chat-form">
             <input class="input" id="chatInput" placeholder="Message" />
-            <button class="btn btn-primary" type="submit">Send</button>
+            <button class="btn btn-primary compact" type="submit">Send</button>
           </form>
-        </div>
-        <div class="participants-panel">
-          <h3>Participants</h3>
-          <div class="participants-list" id="participantsList"></div>
-          <h4 style="margin-top: 16px">Files</h4>
-          <div class="dropzone" id="fileDropzone">
-            Drag files here or click upload
+        </section>
+
+        <section class="side-panel resource-panel">
+          <div class="panel-heading">
+            <h2>Uploads</h2>
+            <button class="btn btn-ghost compact" id="uploadFileBtn">Upload</button>
           </div>
+          <div class="dropzone" id="fileDropzone">Drop files here or click upload</div>
           <div class="participants-list" id="filesList"></div>
-          <h4 style="margin-top: 16px">Notes</h4>
-          <textarea class="textarea" id="notesInput" rows="3" placeholder="Save key takeaways"></textarea>
-          <button class="btn btn-primary" id="saveNoteBtn" style="margin-top: 10px">
-            Save note
-          </button>
-          <div class="participants-list" id="notesList" style="margin-top: 12px"></div>
-          <h4 style="margin-top: 16px">Live share</h4>
-          <div class="muted">Videos float over the workspace.</div>
-        </div>
+        </section>
+
+        <section class="side-panel notes-panel">
+          <div class="panel-heading">
+            <h2>Notes</h2>
+            <button class="btn btn-primary compact" id="saveNoteBtn">Save</button>
+          </div>
+          <textarea class="textarea" id="notesInput" rows="3" placeholder="Capture a takeaway"></textarea>
+          <div class="participants-list" id="notesList"></div>
+        </section>
       </aside>
     </div>
 
@@ -157,10 +133,11 @@
       <div class="modal open">
         <div class="modal-header">
           <h3>Upload file</h3>
-          <button class="btn btn-ghost" data-close>Close</button>
+          <button class="btn btn-ghost compact" data-close>Close</button>
         </div>
         <form id="uploadForm" class="auth-form">
-          <input class="input" type="file" name="file" accept="image/*,application/pdf,text/plain" required />
+          <input class="input" type="file" name="file" accept="image/*,application/pdf,text/plain,text/markdown,.md" required />
+          <div class="upload-preview" id="uploadPreview"></div>
           <div class="progress-bar"><span id="uploadProgress"></span></div>
           <button class="btn btn-primary" type="submit">Upload</button>
         </form>
@@ -171,31 +148,33 @@
       <div class="modal modal-wide">
         <div class="modal-header">
           <h3 id="fileViewerTitle">File preview</h3>
-          <div style="display:flex; gap:8px; align-items:center;">
-            <button class="btn btn-ghost" id="fileDownloadBtn">Download</button>
-            <button class="btn btn-ghost" data-close>Close</button>
+          <div class="modal-actions">
+            <button class="btn btn-ghost compact" id="fileDownloadBtn">Download</button>
+            <button class="btn btn-ghost compact" data-close>Close</button>
           </div>
         </div>
         <div class="viewer-body">
           <div class="viewer-stage" id="fileViewerStage">
             <img id="fileViewerImage" alt="Shared file" />
+            <iframe id="fileViewerFrame" title="Shared PDF preview"></iframe>
+            <pre id="fileViewerText"></pre>
             <canvas id="fileViewerCanvas"></canvas>
           </div>
           <div class="viewer-toolbar">
-            <button class="btn btn-ghost" data-tool="pencil">Pen</button>
-            <button class="btn btn-ghost" data-tool="highlighter">Highlight</button>
-            <button class="btn btn-ghost" data-tool="eraser">Eraser</button>
-            <button class="btn btn-ghost" data-tool="rect">Rect</button>
-            <button class="btn btn-ghost" data-tool="ellipse">Ellipse</button>
-            <button class="btn btn-ghost" data-tool="text">Text</button>
+            <button class="btn btn-ghost compact" data-tool="pencil">Pen</button>
+            <button class="btn btn-ghost compact" data-tool="highlighter">Highlight</button>
+            <button class="btn btn-ghost compact" data-tool="eraser">Eraser</button>
+            <button class="btn btn-ghost compact" data-tool="rect">Rect</button>
+            <button class="btn btn-ghost compact" data-tool="ellipse">Oval</button>
+            <button class="btn btn-ghost compact" data-tool="text">Text</button>
             <input type="color" id="viewerColorPicker" value="#6ee7ff" />
-            <input type="range" id="viewerStrokeSize" min="1" max="20" value="4" />
-            <button class="btn btn-ghost" id="viewerZoomInBtn">Zoom +</button>
-            <button class="btn btn-ghost" id="viewerZoomOutBtn">Zoom -</button>
-            <button class="btn btn-ghost" id="viewerFullscreenBtn">Fullscreen</button>
-            <button class="btn btn-ghost" id="viewerUndoBtn">Undo</button>
-            <button class="btn btn-ghost" id="viewerRedoBtn">Redo</button>
-            <button class="btn btn-danger" id="viewerClearBtn">Clear</button>
+            <input type="range" id="viewerStrokeSize" min="1" max="24" value="5" />
+            <button class="btn btn-ghost compact" id="viewerZoomInBtn">Zoom +</button>
+            <button class="btn btn-ghost compact" id="viewerZoomOutBtn">Zoom -</button>
+            <button class="btn btn-ghost compact" id="viewerFullscreenBtn">Fullscreen</button>
+            <button class="btn btn-ghost compact" id="viewerUndoBtn">Undo</button>
+            <button class="btn btn-ghost compact" id="viewerRedoBtn">Redo</button>
+            <button class="btn btn-danger compact" id="viewerClearBtn">Clear</button>
           </div>
         </div>
       </div>
@@ -204,7 +183,7 @@
     <div class="toast-container" id="toastContainer"></div>
 
     <script defer src="/socket.io/socket.io.js"></script>
-    <script defer src="/js/runtime-config.js"></script>
+    <script defer src="/runtime-config.js"></script>
     <script type="module" src="/js/room.js"></script>
   </body>
 </html>
