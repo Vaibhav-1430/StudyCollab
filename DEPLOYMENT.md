@@ -5,8 +5,8 @@
 Set these in Render or your container runtime:
 
 - `NODE_ENV=production`
-- `CLIENT_URL=https://your-render-service.onrender.com`
 - `CORS_ORIGINS=https://your-render-service.onrender.com`
+- `CLIENT_URL=https://your-render-service.onrender.com` optional when it matches `CORS_ORIGINS`
 - `MONGO_URI=mongodb+srv://...`
 - `JWT_SECRET` with at least 32 random characters
 - `JWT_EXPIRES_IN=7d`
@@ -36,7 +36,7 @@ Optional tuning:
 
 1. Push this repo to GitHub.
 2. Create a Render Blueprint from `render.yaml`, or create a Node web service manually.
-3. Set `CLIENT_URL` and `CORS_ORIGINS` to the Render service URL.
+3. Set `CORS_ORIGINS` to the Render service URL. Set `CLIENT_URL` too if you use a separate frontend URL.
 4. Set `MONGO_URI`, Cloudinary values, and TURN credentials.
 5. Deploy. Render should run `npm ci` and `npm start`.
 6. Confirm `/healthz` returns `200` and `/readyz` returns `{"ready":true}`.

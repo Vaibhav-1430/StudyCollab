@@ -33,8 +33,15 @@ const requireValue = (key, value) => {
 
 const isProduction = nodeEnv === 'production';
 const port = toInt(process.env.PORT, 4000);
-const clientUrl = process.env.CLIENT_URL || `http://localhost:${port}`;
-const corsOrigins = toList(process.env.CORS_ORIGINS, isProduction ? [] : [clientUrl]);
+const rawCorsOrigins = toList(process.env.CORS_ORIGINS);
+const renderExternalUrl = process.env.RENDER_EXTERNAL_URL;
+const clientUrl =
+  process.env.CLIENT_URL ||
+  rawCorsOrigins[0] ||
+  renderExternalUrl ||
+  `http://localhost:${port}`;
+const defaultCorsOrigins = isProduction && renderExternalUrl ? [renderExternalUrl] : [clientUrl];
+const corsOrigins = toList(process.env.CORS_ORIGINS, isProduction ? defaultCorsOrigins : [clientUrl]);
 
 if (!corsOrigins.length) {
   corsOrigins.push(clientUrl);
@@ -111,14 +118,13 @@ const config = {
 
 if (isProduction) {
   requireValue('MONGO_URI', process.env.MONGO_URI);
-  requireValue('CLIENT_URL', process.env.CLIENT_URL);
   requireValue('CLOUDINARY_CLOUD_NAME', config.cloudinary.cloudName);
   requireValue('CLOUDINARY_API_KEY', config.cloudinary.apiKey);
   requireValue('CLOUDINARY_API_SECRET', config.cloudinary.apiSecret);
   if (config.jwt.secret.length < 32 || config.jwt.secret === 'change_me') {
     throw new Error('JWT_SECRET must be a strong production secret of at least 32 characters');
   }
-  if (!process.env.CORS_ORIGINS) {
+  if (!config.corsOrigins.length) {
     throw new Error('CORS_ORIGINS must be set in production');
   }
 }
