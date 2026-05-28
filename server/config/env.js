@@ -118,9 +118,6 @@ const config = {
 
 if (isProduction) {
   requireValue('MONGO_URI', process.env.MONGO_URI);
-  requireValue('CLOUDINARY_CLOUD_NAME', config.cloudinary.cloudName);
-  requireValue('CLOUDINARY_API_KEY', config.cloudinary.apiKey);
-  requireValue('CLOUDINARY_API_SECRET', config.cloudinary.apiSecret);
   if (config.jwt.secret.length < 32 || config.jwt.secret === 'change_me') {
     throw new Error('JWT_SECRET must be a strong production secret of at least 32 characters');
   }

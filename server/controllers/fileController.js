@@ -77,7 +77,7 @@ const uploadFile = asyncHandler(async (req, res) => {
   }
 
   if (!cloudinary) {
-    return res.status(500).json({ message: 'File storage is not configured' });
+    return res.status(503).json({ message: 'File storage is not configured' });
   }
 
   const folder = config.cloudinary.folder;

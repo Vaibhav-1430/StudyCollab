@@ -42,7 +42,7 @@ const uploadAvatar = asyncHandler(async (req, res) => {
   }
 
   if (!cloudinary) {
-    return res.status(500).json({ message: 'Avatar storage is not configured' });
+    return res.status(503).json({ message: 'Avatar storage is not configured' });
   }
 
   const folder = config.cloudinary.folder;

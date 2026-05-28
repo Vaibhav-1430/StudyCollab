@@ -10,14 +10,12 @@ Set these in Render or your container runtime:
 - `MONGO_URI=mongodb+srv://...`
 - `JWT_SECRET` with at least 32 random characters
 - `JWT_EXPIRES_IN=7d`
-- `CLOUDINARY_CLOUD_NAME`
-- `CLOUDINARY_API_KEY`
-- `CLOUDINARY_API_SECRET`
 - `CLOUDINARY_FOLDER=study-collab`
 - `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` for reliable WebRTC outside easy NATs
 
 Optional tuning:
 
+- `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` enable uploads and avatars
 - `MONGO_MAX_POOL_SIZE=20`
 - `RATE_LIMIT_MAX=120`
 - `MAX_FILE_SIZE_MB=20`
