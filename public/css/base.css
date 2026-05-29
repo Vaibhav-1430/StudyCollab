@@ -1,29 +1,26 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Sora:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg-0: #0b0f17;
-  --bg-1: #0f1624;
-  --bg-2: #101a2b;
-  --glass: rgba(255, 255, 255, 0.08);
-  --glass-strong: rgba(255, 255, 255, 0.12);
-  --stroke: rgba(255, 255, 255, 0.12);
-  --stroke-strong: rgba(255, 255, 255, 0.2);
-  --surface-1: rgba(15, 22, 36, 0.85);
-  --surface-2: rgba(18, 26, 44, 0.9);
-  --text-1: #ecf0ff;
-  --text-2: #b9c4e3;
-  --muted: #8391b8;
-  --accent: #6ee7ff;
-  --accent-2: #9b7bff;
-  --accent-3: #47f1c9;
-  --danger: #ff6b6b;
-  --success: #4ade80;
-  --shadow: 0 20px 50px rgba(5, 10, 20, 0.35);
-  --shadow-soft: 0 12px 30px rgba(10, 20, 40, 0.25);
-  --shadow-tight: 0 10px 25px rgba(8, 12, 24, 0.4);
-  --radius-lg: 20px;
-  --radius-md: 14px;
-  --radius-sm: 10px;
+  --bg-0: #08090d;
+  --bg-1: #0d0f14;
+  --bg-2: #111318;
+  --bg-3: #16191f;
+  --stroke: rgba(255, 255, 255, 0.07);
+  --stroke-hover: rgba(255, 255, 255, 0.13);
+  --text-1: #f1f2f5;
+  --text-2: #8b91a0;
+  --muted: #555b6b;
+  --accent: #4f8ef7;
+  --accent-soft: rgba(79, 142, 247, 0.12);
+  --accent-2: #7c6af0;
+  --success: #3ecf8e;
+  --danger: #f56565;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.5);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
   --space-1: 6px;
   --space-2: 10px;
   --space-3: 16px;
@@ -43,33 +40,33 @@ html {
 }
 
 body {
-  font-family: 'Space Grotesk', 'Plus Jakarta Sans', sans-serif;
-  color: var(--text-1);
-  background: radial-gradient(1200px 800px at 10% -10%, rgba(110, 231, 255, 0.18), transparent 50%),
-    radial-gradient(900px 700px at 90% 10%, rgba(155, 123, 255, 0.18), transparent 50%),
-    linear-gradient(160deg, var(--bg-0), var(--bg-1));
   min-height: 100vh;
   overflow-x: hidden;
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-family: 'Sora', sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
-body > *:not(.page-loader):not(.bg-orbs) {
-  position: relative;
-  z-index: 1;
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--text-1);
+  line-height: 1.1;
 }
 
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 0);
-  background-size: 28px 28px;
-  opacity: 0.2;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.muted {
-  color: var(--muted);
+code,
+pre,
+kbd,
+samp {
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.5;
 }
 
 a {
@@ -82,73 +79,65 @@ a:visited {
 }
 
 img {
-  max-width: 100%;
   display: block;
+  max-width: 100%;
 }
 
 button,
 input,
 select,
 textarea {
-  font-family: inherit;
+  font: inherit;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.15);
 }
 
 .container {
-  width: min(1200px, 92vw);
+  width: min(1160px, calc(100vw - 40px));
   margin: 0 auto;
 }
 
 .section {
-  padding: 96px 0;
+  padding: 88px 0;
 }
 
-.bg-orbs {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.6;
-  z-index: 0;
+.muted {
+  color: var(--text-2);
 }
 
-.bg-orbs::before,
-.bg-orbs::after {
-  content: '';
-  position: absolute;
-  width: 360px;
-  height: 360px;
-  border-radius: 50%;
-  filter: blur(60px);
-  opacity: 0.5;
-  animation: float 12s ease-in-out infinite;
+.text-accent {
+  color: var(--accent);
 }
 
-.bg-orbs::before {
-  top: 10%;
-  left: 8%;
-  background: rgba(110, 231, 255, 0.35);
+.divider {
+  height: 1px;
+  margin: 24px 0;
+  background: var(--stroke);
 }
 
-.bg-orbs::after {
-  bottom: 12%;
-  right: 10%;
-  background: rgba(155, 123, 255, 0.35);
-  animation-delay: -4s;
-}
-
-@keyframes float {
-  0%,
-  100% {
-    transform: translateY(0px);
-  }
-  50% {
-    transform: translateY(-20px);
-  }
+.hidden {
+  display: none !important;
 }
 
 .fade-in {
   opacity: 0;
-  transform: translateY(16px);
-  animation: fadeUp 0.8s ease forwards;
+  transform: translateY(10px);
+  animation: fadeUp 0.5s ease forwards;
 }
 
 @keyframes fadeUp {
@@ -158,14 +147,10 @@ textarea {
   }
 }
 
-.hidden {
-  display: none;
-}
-
 .reveal {
   opacity: 0;
-  transform: translateY(20px);
-  transition: opacity 0.7s ease, transform 0.7s ease;
+  transform: translateY(10px);
+  transition: opacity 0.5s ease, transform 0.5s ease;
 }
 
 .reveal.in-view {
@@ -176,28 +161,27 @@ textarea {
 .page-loader {
   position: fixed;
   inset: 0;
-  background: rgba(8, 12, 22, 0.85);
+  z-index: 200;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 200;
-  transition: opacity 0.4s ease;
+  background: rgba(8, 9, 13, 0.92);
+  transition: opacity 0.35s ease, visibility 0.35s ease;
 }
 
 .page-loader.hidden {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.35s ease, visibility 0.35s ease;
 }
 
 .spinner {
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  border: 4px solid rgba(255, 255, 255, 0.15);
+  width: 44px;
+  height: 44px;
+  border: 3px solid var(--stroke-hover);
   border-top-color: var(--accent);
-  animation: spin 0.9s linear infinite;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 @keyframes spin {
@@ -207,21 +191,35 @@ textarea {
 }
 
 * {
-  scrollbar-color: rgba(110, 231, 255, 0.4) rgba(255, 255, 255, 0.08);
+  scrollbar-color: rgba(79, 142, 247, 0.55) var(--bg-1);
   scrollbar-width: thin;
 }
 
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 *::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 999px;
+  background: var(--bg-1);
 }
 
 *::-webkit-scrollbar-thumb {
-  background: rgba(110, 231, 255, 0.35);
-  border-radius: 999px;
+  background: rgba(79, 142, 247, 0.5);
+  border: 2px solid var(--bg-1);
+  border-radius: var(--radius-sm);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(79, 142, 247, 0.75);
+}
+
+@media (max-width: 768px) {
+  .container {
+    width: min(100% - 32px, 1160px);
+  }
+
+  .section {
+    padding: 64px 0;
+  }
 }
